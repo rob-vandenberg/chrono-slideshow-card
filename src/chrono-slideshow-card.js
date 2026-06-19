@@ -6,12 +6,20 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.4';
+const CARD_VERSION = '0.0.5';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.5: Fix: overlay font sizes used em, scaling against the document root
+//          font-size instead of the card's own rendered size — looked correct
+//          on a full-size dashboard but oversized in the small editor preview.
+//          Switched to cqmin (container query units) via container-type:size
+//          on ha-card, so font size scales with the card's own box in any
+//          context. min-height raised 200px -> 400px (at 400px, 1cqmin ~= 1em
+//          at the default 16px root, so existing font_size values keep
+//          roughly their current visual size).
 // v0.0.4: Fix: .slideshow-container still collapsed to 0 height in some
 //          contexts (editor preview) despite the v0.0.3 :host fix. Changed
 //          from width/height:100% to position:absolute+inset:0, anchoring
@@ -2049,7 +2057,7 @@ class ChronoSlideshowCard extends LitElement {
   // ── Item style map ────────────────────────────────────────────────────────
   _itemStyleMap(item) {
     const px  = v => (v !== '' && v != null) ? `${v}px` : undefined;
-    const em  = v => (v !== '' && v != null) ? `${v}em` : undefined;
+    const em  = v => (v !== '' && v != null) ? `${v}cqmin` : undefined;
     const raw = v => (v !== '' && v != null) ? `${v}`   : undefined;
     return {
       'color':            item.font_color       || undefined,
@@ -2238,9 +2246,10 @@ class ChronoSlideshowCard extends LitElement {
       position: relative;
       width: 100%;
       height: 100%;
-      min-height: 200px;
+      min-height: 400px;
       overflow: hidden;
       box-sizing: border-box;
+      container-type: size;
     }
     .slideshow-container {
       position: absolute;
