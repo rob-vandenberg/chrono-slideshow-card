@@ -6,12 +6,27 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.13';
+const CARD_VERSION = '0.0.14';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.14: New feature: per-item text shadow + stroke, for readability against
+//          backgrounds close to the text's own color. Five new item fields:
+//          text_shadow_color, text_shadow_blur, text_shadow_offset_x,
+//          text_shadow_offset_y, text_shadow_stroke_width — added to
+//          DEFAULT_ITEM, NUMERIC_ITEM_KEYS, UI_ITEM_KEYS. New editor row
+//          (.item-text-shadow, same 5-column grid as the other two item
+//          rows) with a color picker + 4 number fields. _itemStyleMap() emits
+//          text-shadow (offset-x offset-y blur color) and
+//          -webkit-text-stroke-width/-color, all numeric parts scaled via the
+//          existing pxScaled() helper consistent with every other size value.
+//          Both gated on text_shadow_color being set — no color means neither
+//          renders. Color picker's free-text field (paired with the native
+//          swatch in csColorPicker, confirmed by re-reading its actual
+//          implementation) already accepts 8-digit hex with alpha, passed
+//          through unprocessed — no separate opacity field needed.
 // v0.0.13: Fix regression from 0.0.12: applying aspect-ratio unconditionally
 //          to ha-card affected the real dashboard too (confirmed: HA's
 //          flex/grid-based dashboard layouts don't make ha-card's height as
@@ -161,6 +176,11 @@ const DEFAULT_ITEM = {
   padding_bottom:   10,
   padding_left:     10,
   padding_right:    10,
+  text_shadow_color:        '',
+  text_shadow_blur:         0,
+  text_shadow_offset_x:     0,
+  text_shadow_offset_y:     0,
+  text_shadow_stroke_width: 0,
 };
 
 const DEFAULT_ENTITY_ITEM   = { ...DEFAULT_ITEM, entity:   '' };
@@ -227,6 +247,8 @@ const DEFAULT_CONFIG = {
 const NUMERIC_ITEM_KEYS = new Set([
   'font_size', 'font_weight', 'line_height', 'border_radius',
   'padding_top', 'padding_bottom', 'padding_left', 'padding_right',
+  'text_shadow_blur', 'text_shadow_offset_x', 'text_shadow_offset_y',
+  'text_shadow_stroke_width',
 ]);
 
 // Keys managed by dedicated UI fields. All other keys go into the YAML textarea.
@@ -238,6 +260,8 @@ const UI_ITEM_KEYS = new Set([
   'font_color', 'font_size', 'font_weight', 'line_height', 'border_radius',
   'background_color',
   'padding_top', 'padding_bottom', 'padding_left', 'padding_right',
+  'text_shadow_color', 'text_shadow_blur', 'text_shadow_offset_x',
+  'text_shadow_offset_y', 'text_shadow_stroke_width',
 ]);
 
 const UI_CARD_KEYS = new Set([
@@ -1399,6 +1423,15 @@ class ChronoSlideshowCardEditor extends LitElement {
                     ${csTextField('Padding\nright (px)',  item.padding_right  ?? '', e => this._itemChanged(index, 'padding_right',  e), { type: 'number', step: '1', min: '0' })}
                   </div>
 
+                  <!-- Text shadow / stroke: color, blur, x/y offset, stroke width -->
+                  <div class="item-text-shadow">
+                    ${csColorPicker('Shadow color', item.text_shadow_color ?? '', e => this._itemChanged(index, 'text_shadow_color', e))}
+                    ${csTextField('Shadow\nblur (px)',     item.text_shadow_blur         ?? '', e => this._itemChanged(index, 'text_shadow_blur',         e), { type: 'number', step: '1', min: '0' })}
+                    ${csTextField('Shadow\noffset X (px)', item.text_shadow_offset_x     ?? '', e => this._itemChanged(index, 'text_shadow_offset_x',     e), { type: 'number', step: '1' })}
+                    ${csTextField('Shadow\noffset Y (px)', item.text_shadow_offset_y     ?? '', e => this._itemChanged(index, 'text_shadow_offset_y',     e), { type: 'number', step: '1' })}
+                    ${csTextField('Stroke\nwidth (px)',    item.text_shadow_stroke_width ?? '', e => this._itemChanged(index, 'text_shadow_stroke_width', e), { type: 'number', step: '1', min: '0' })}
+                  </div>
+
                   <!-- Remove button -->
                   <div class="remove-item-row">
                     <button class="remove-item-btn" @click=${() => this._removeItem(index)}>
@@ -1487,6 +1520,14 @@ class ChronoSlideshowCardEditor extends LitElement {
     }
 
     .item-bg-color-padding {
+      display: grid;
+      grid-template-columns: 19fr 8fr 8fr 8fr 8fr;
+      gap: 8px;
+      align-items: end;
+      margin-bottom: 8px;
+    }
+
+    .item-text-shadow {
       display: grid;
       grid-template-columns: 19fr 8fr 8fr 8fr 8fr;
       gap: 8px;
@@ -2203,6 +2244,11 @@ class ChronoSlideshowCard extends LitElement {
       'padding-bottom':   pxScaled(item.padding_bottom),
       'padding-left':     pxScaled(item.padding_left),
       'padding-right':    pxScaled(item.padding_right),
+      'text-shadow':              item.text_shadow_color
+        ? `${pxScaled(item.text_shadow_offset_x ?? 0)} ${pxScaled(item.text_shadow_offset_y ?? 0)} ${pxScaled(item.text_shadow_blur ?? 0)} ${item.text_shadow_color}`
+        : undefined,
+      '-webkit-text-stroke-width': item.text_shadow_color ? pxScaled(item.text_shadow_stroke_width ?? 0) : undefined,
+      '-webkit-text-stroke-color': item.text_shadow_color || undefined,
     };
   }
 
