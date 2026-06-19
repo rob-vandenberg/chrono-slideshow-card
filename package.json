@@ -1,0 +1,10 @@
+{
+  "name": "chrono-slideshow-card",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "terser src/chrono-slideshow-card.js -o dist/chrono-slideshow-card.js --compress --mangle"
+  },
+  "devDependencies": {
+    "terser": "^5.0.0"
+  }
+}
