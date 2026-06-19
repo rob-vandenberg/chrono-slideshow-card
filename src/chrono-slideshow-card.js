@@ -6,12 +6,26 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.10';
+const CARD_VERSION = '0.0.11';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.11: Simplification, no output change. 0.0.10 had two separate scaling
+//          mechanisms: JS-side multiplication in _itemStyleMap() and CSS
+//          calc(var(--scale-factor)) in the static stylesheet, requiring
+//          --scale-factor to be threaded through three separate <ha-card>
+//          template strings as a reactive Lit state property. Unified onto
+//          one mechanism: the ResizeObserver callback now calls
+//          this.style.setProperty('--scale-factor', ...) directly on the host
+//          element, which inherits through the shadow boundary to everything
+//          inside without needing to be set on <ha-card> explicitly.
+//          _itemStyleMap() now emits calc(Nunit * var(--scale-factor, 1))
+//          strings instead of doing the multiplication in JS. _scaleFactor is
+//          no longer a reactive property or instance field — resizing no
+//          longer triggers a Lit re-render at all, the browser's CSS engine
+//          handles it. Same visual output as 0.0.10, fewer moving parts.
 // v0.0.10: Fix: _scaleFactor was only applied to font-size, leaving padding,
 //          border-radius, zone gap, entity-icon size, entity-label sizing, and
 //          message-overlay sizing as fixed px regardless of card size. Verified
@@ -1783,7 +1797,6 @@ class ChronoSlideshowCard extends LitElement {
     _loadError:     { state: true },
     _swipeOffset:   { state: true },
     _transitioning: { state: true },
-    _scaleFactor:   { state: true },
   };
 
   static getCardSize() {
@@ -1822,7 +1835,6 @@ class ChronoSlideshowCard extends LitElement {
     this._transitionTimeoutId = null;
     this._animationStartedFor = null;
     this._transitionId        = 0;
-    this._scaleFactor         = 1;
     this._resizeObserver      = null;
   }
 
@@ -1890,10 +1902,7 @@ class ChronoSlideshowCard extends LitElement {
     this._resizeObserver = new ResizeObserver(entries => {
       const height = entries[0]?.contentRect?.height;
       if (!height) return;
-      const newScale = height / REFERENCE_HEIGHT_PX;
-      if (Math.abs(newScale - this._scaleFactor) > 0.01) {
-        this._scaleFactor = newScale;
-      }
+      this.style.setProperty('--scale-factor', height / REFERENCE_HEIGHT_PX);
     });
     this._resizeObserver.observe(this);
   }
@@ -2123,20 +2132,20 @@ class ChronoSlideshowCard extends LitElement {
 
   // ── Item style map ────────────────────────────────────────────────────────
   _itemStyleMap(item) {
-    const px  = v => (v !== '' && v != null) ? `${v}px` : undefined;
-    const em  = v => (v !== '' && v != null) ? `${v}em` : undefined;
-    const raw = v => (v !== '' && v != null) ? `${v}`   : undefined;
+    const pxScaled = v => (v !== '' && v != null) ? `calc(${v}px * var(--scale-factor, 1))` : undefined;
+    const emScaled = v => (v !== '' && v != null) ? `calc(${v}em * var(--scale-factor, 1))` : undefined;
+    const raw      = v => (v !== '' && v != null) ? `${v}`   : undefined;
     return {
       'color':            item.font_color       || undefined,
-      'font-size':        em(item.font_size * this._scaleFactor),
+      'font-size':        emScaled(item.font_size),
       'font-weight':      raw(item.font_weight),
       'line-height':      raw(item.line_height),
-      'border-radius':    px(item.border_radius * this._scaleFactor),
+      'border-radius':    pxScaled(item.border_radius),
       'background-color': item.background_color || undefined,
-      'padding-top':      px(item.padding_top    * this._scaleFactor),
-      'padding-bottom':   px(item.padding_bottom * this._scaleFactor),
-      'padding-left':     px(item.padding_left   * this._scaleFactor),
-      'padding-right':    px(item.padding_right  * this._scaleFactor),
+      'padding-top':      pxScaled(item.padding_top),
+      'padding-bottom':   pxScaled(item.padding_bottom),
+      'padding-left':     pxScaled(item.padding_left),
+      'padding-right':    pxScaled(item.padding_right),
     };
   }
 
@@ -2472,7 +2481,7 @@ class ChronoSlideshowCard extends LitElement {
 
     if (!stateObj) {
       return html`
-        <ha-card style="--scale-factor: ${this._scaleFactor}">
+        <ha-card>
           <div class="slideshow-container">
             <div class="message-overlay">
               <div>
@@ -2487,7 +2496,7 @@ class ChronoSlideshowCard extends LitElement {
 
     if (this._files.length === 0) {
       return html`
-        <ha-card style="--scale-factor: ${this._scaleFactor}">
+        <ha-card>
           <div class="slideshow-container">
             <div class="message-overlay">
               <div>
@@ -2504,7 +2513,7 @@ class ChronoSlideshowCard extends LitElement {
     const outgoing = this._transitioning ? this._outgoingPhoto : null;
 
     return html`
-      <ha-card style="--scale-factor: ${this._scaleFactor}">
+      <ha-card>
         <div
           class="slideshow-container"
           @touchstart=${(e) => this._onTouchStart(e)}
