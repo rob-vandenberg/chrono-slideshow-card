@@ -6,12 +6,27 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.9';
+const CARD_VERSION = '0.0.10';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.10: Fix: _scaleFactor was only applied to font-size, leaving padding,
+//          border-radius, zone gap, entity-icon size, entity-label sizing, and
+//          message-overlay sizing as fixed px regardless of card size. Verified
+//          via console measurement that font-size itself scaled with an exact
+//          matching ratio between dashboard and editor-preview contexts, so the
+//          remaining visible mismatch was isolated to these untouched
+//          properties. _itemStyleMap() now multiplies padding_top/bottom/left/
+//          right and border_radius by _scaleFactor, same as font_size. All
+//          three <ha-card> render blocks now set an inline
+//          --scale-factor custom property from _scaleFactor; static CSS for
+//          .overlay-zone, .overlay-entity-item, .entity-state-label,
+//          .overlay-entity-missing, .message-overlay, and .message-overlay
+//          .message-icon now reference calc(Npx * var(--scale-factor, 1))
+//          instead of fixed px, so every overlay-related size now scales
+//          proportionally with the card's own rendered height.
 // v0.0.9: Fix: overlay font-size scaled with a ResizeObserver-derived factor
 //          instead of plain em. Observer watches the host element's own
 //          rendered height and computes scaleFactor = height / 400 (400 =
@@ -2116,12 +2131,12 @@ class ChronoSlideshowCard extends LitElement {
       'font-size':        em(item.font_size * this._scaleFactor),
       'font-weight':      raw(item.font_weight),
       'line-height':      raw(item.line_height),
-      'border-radius':    px(item.border_radius),
+      'border-radius':    px(item.border_radius * this._scaleFactor),
       'background-color': item.background_color || undefined,
-      'padding-top':      px(item.padding_top),
-      'padding-bottom':   px(item.padding_bottom),
-      'padding-left':     px(item.padding_left),
-      'padding-right':    px(item.padding_right),
+      'padding-top':      px(item.padding_top    * this._scaleFactor),
+      'padding-bottom':   px(item.padding_bottom * this._scaleFactor),
+      'padding-left':     px(item.padding_left   * this._scaleFactor),
+      'padding-right':    px(item.padding_right  * this._scaleFactor),
     };
   }
 
@@ -2372,9 +2387,9 @@ class ChronoSlideshowCard extends LitElement {
     .overlay-zone {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: calc(4px * var(--scale-factor, 1));
       pointer-events: auto;
-      padding: 8px;
+      padding: calc(8px * var(--scale-factor, 1));
     }
     .overlay-zone-top-left,    .overlay-zone-middle-left,   .overlay-zone-bottom-left   { align-items: flex-start; text-align: left;   }
     .overlay-zone-top-center, .overlay-zone-middle-center, .overlay-zone-bottom-center { align-items: center;     text-align: center; }
@@ -2393,25 +2408,25 @@ class ChronoSlideshowCard extends LitElement {
       flex-direction: column;
       align-items: center;
       cursor: pointer;
-      min-width: 40px;
+      min-width: calc(40px * var(--scale-factor, 1));
     }
     .overlay-entity-item ha-state-icon {
-      --mdc-icon-size: 24px;
+      --mdc-icon-size: calc(24px * var(--scale-factor, 1));
     }
     .entity-state-label {
       display: block;
-      font-size: 10px;
+      font-size: calc(10px * var(--scale-factor, 1));
       text-align: center;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       color: var(--ha-picture-card-text-color, white);
-      max-width: 96px;
+      max-width: calc(96px * var(--scale-factor, 1));
     }
     .overlay-entity-missing {
       color: var(--error-color, #f44336);
       font-weight: bold;
-      padding: 0 4px;
+      padding: 0 calc(4px * var(--scale-factor, 1));
     }
 
     /* ── Transitions ──────────────────────────────────────────────────────────
@@ -2430,15 +2445,15 @@ class ChronoSlideshowCard extends LitElement {
       align-items: center;
       justify-content: center;
       text-align: center;
-      padding: 24px;
+      padding: calc(24px * var(--scale-factor, 1));
       box-sizing: border-box;
       color: var(--secondary-text-color);
       background: var(--card-background-color, #1c1c1c);
     }
     .message-overlay .message-icon {
-      --mdc-icon-size: 48px;
+      --mdc-icon-size: calc(48px * var(--scale-factor, 1));
       display: block;
-      margin: 0 auto 12px;
+      margin: 0 auto calc(12px * var(--scale-factor, 1));
       color: var(--secondary-text-color);
     }
   `;
@@ -2457,7 +2472,7 @@ class ChronoSlideshowCard extends LitElement {
 
     if (!stateObj) {
       return html`
-        <ha-card>
+        <ha-card style="--scale-factor: ${this._scaleFactor}">
           <div class="slideshow-container">
             <div class="message-overlay">
               <div>
@@ -2472,7 +2487,7 @@ class ChronoSlideshowCard extends LitElement {
 
     if (this._files.length === 0) {
       return html`
-        <ha-card>
+        <ha-card style="--scale-factor: ${this._scaleFactor}">
           <div class="slideshow-container">
             <div class="message-overlay">
               <div>
@@ -2489,7 +2504,7 @@ class ChronoSlideshowCard extends LitElement {
     const outgoing = this._transitioning ? this._outgoingPhoto : null;
 
     return html`
-      <ha-card>
+      <ha-card style="--scale-factor: ${this._scaleFactor}">
         <div
           class="slideshow-container"
           @touchstart=${(e) => this._onTouchStart(e)}
