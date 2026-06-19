@@ -6,12 +6,16 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.7';
+const CARD_VERSION = '0.0.8';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.8: Full revert of the container-query experiment (0.0.5-0.0.7). Back to
+//          plain em font-size, min-height:200px, no container-type. Restores
+//          known-working 0.0.4 rendering. Editor-preview font-size mismatch
+//          is back (cosmetic only) — to be solved properly in a fresh session.
 // v0.0.7: Fix: confirmed via live DOM inspection that overlay-zone collapsed
 //          to 0x0 under size containment, despite its child span having a
 //          real computed size — size containment disables content-based flex
@@ -2068,7 +2072,7 @@ class ChronoSlideshowCard extends LitElement {
   // ── Item style map ────────────────────────────────────────────────────────
   _itemStyleMap(item) {
     const px  = v => (v !== '' && v != null) ? `${v}px` : undefined;
-    const em  = v => (v !== '' && v != null) ? `${v}cqmin` : undefined;
+    const em  = v => (v !== '' && v != null) ? `${v}em` : undefined;
     const raw = v => (v !== '' && v != null) ? `${v}`   : undefined;
     return {
       'color':            item.font_color       || undefined,
@@ -2257,10 +2261,9 @@ class ChronoSlideshowCard extends LitElement {
       position: relative;
       width: 100%;
       height: 100%;
-      min-height: 400px;
+      min-height: 200px;
       overflow: hidden;
       box-sizing: border-box;
-      container-type: size;
     }
     .slideshow-container {
       position: absolute;
@@ -2319,8 +2322,6 @@ class ChronoSlideshowCard extends LitElement {
     .overlay-cell {
       flex: 1;
       display: flex;
-      width: 100%;
-      height: 100%;
       min-width: 0;
       min-height: 0;
     }
