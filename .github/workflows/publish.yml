@@ -26,7 +26,7 @@ jobs:
       - name: Commit and push
         uses: EndBug/add-and-commit@v10
         with:
-          add: '["dist/chrono-picture-card.js"]'
+          add: '["dist/chrono-slideshow-card.js"]'
           message: "Publishing version ${{ github.event.inputs.version }}"
           tag: "v${{ github.event.inputs.version }}"
           tag_push: '--force'
