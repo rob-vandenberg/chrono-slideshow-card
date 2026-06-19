@@ -6,12 +6,28 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.8';
+const CARD_VERSION = '0.0.9';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.9: Fix: overlay font-size scaled with a ResizeObserver-derived factor
+//          instead of plain em. Observer watches the host element's own
+//          rendered height and computes scaleFactor = height / 400 (400 =
+//          the fixed height HA's editor preview uses when no real dashboard
+//          parent constrains it). _itemStyleMap() multiplies font_size by
+//          this factor before generating the em value. Result: font size is
+//          now proportional to the card's own actual rendered size in any
+//          context (editor preview or dashboard), instead of being anchored
+//          to the document root font-size regardless of card size. Does NOT
+//          use container queries — no container-type/contain anywhere,
+//          avoiding the size-containment/content-based-flex-sizing conflict
+//          that broke 0.0.5-0.0.7. Known consequence: existing font_size
+//          values will render at a different absolute pixel size on real
+//          dashboards than before, unless the dashboard card height happens
+//          to be exactly 400px — re-tuning may be needed; this is an
+//          intended effect of fixing the height-dependency, not a bug.
 // v0.0.8: Full revert of the container-query experiment (0.0.5-0.0.7). Back to
 //          plain em font-size, min-height:200px, no container-type. Restores
 //          known-working 0.0.4 rendering. Editor-preview font-size mismatch
@@ -107,6 +123,13 @@ const DEFAULT_ZONE_MODES = {
   'bottom-center':'static',
   'bottom-right': 'dynamic',
 };
+
+// Reference card height (px) at which a font_size value renders at its
+// literal em size (scale factor 1). This is the fixed height the HA card
+// editor uses when no real dashboard parent constrains the preview. Any
+// other rendered height (dashboard or otherwise) scales proportionally from
+// this baseline via ResizeObserver — see _scaleFactor.
+const REFERENCE_HEIGHT_PX = 400;
 
 const DEFAULT_CONFIG = {
   entity:                'sensor.',
@@ -1745,6 +1768,7 @@ class ChronoSlideshowCard extends LitElement {
     _loadError:     { state: true },
     _swipeOffset:   { state: true },
     _transitioning: { state: true },
+    _scaleFactor:   { state: true },
   };
 
   static getCardSize() {
@@ -1783,6 +1807,8 @@ class ChronoSlideshowCard extends LitElement {
     this._transitionTimeoutId = null;
     this._animationStartedFor = null;
     this._transitionId        = 0;
+    this._scaleFactor         = 1;
+    this._resizeObserver      = null;
   }
 
   set hass(hass) {
@@ -1845,12 +1871,23 @@ class ChronoSlideshowCard extends LitElement {
       this._loadFiles();
     }
     this._startTimer();
+
+    this._resizeObserver = new ResizeObserver(entries => {
+      const height = entries[0]?.contentRect?.height;
+      if (!height) return;
+      const newScale = height / REFERENCE_HEIGHT_PX;
+      if (Math.abs(newScale - this._scaleFactor) > 0.01) {
+        this._scaleFactor = newScale;
+      }
+    });
+    this._resizeObserver.observe(this);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this._teardownSubscriptions();
     this._stopTimer();
+    this._resizeObserver?.disconnect();
   }
 
   // ── Load files from the chrono_folder sensor, sort, and (re)start ───────────
@@ -2076,7 +2113,7 @@ class ChronoSlideshowCard extends LitElement {
     const raw = v => (v !== '' && v != null) ? `${v}`   : undefined;
     return {
       'color':            item.font_color       || undefined,
-      'font-size':        em(item.font_size),
+      'font-size':        em(item.font_size * this._scaleFactor),
       'font-weight':      raw(item.font_weight),
       'line-height':      raw(item.line_height),
       'border-radius':    px(item.border_radius),
