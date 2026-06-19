@@ -1,4 +1,4 @@
-import { LitElement, html, css, unsafeCSS } from 'https://unpkg.com/lit@2.0.0/index.js?module';
+import { LitElement, html, css } from 'https://unpkg.com/lit@2.0.0/index.js?module';
 import { live }                  from 'https://unpkg.com/lit@2.0.0/directives/live.js?module';
 import { styleMap }              from 'https://unpkg.com/lit@2.0.0/directives/style-map.js?module';
 import { unsafeHTML }            from 'https://unpkg.com/lit@2.0.0/directives/unsafe-html.js?module';
@@ -6,12 +6,29 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.12';
+const CARD_VERSION = '0.0.13';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.13: Fix regression from 0.0.12: applying aspect-ratio unconditionally
+//          to ha-card affected the real dashboard too (confirmed: HA's
+//          flex/grid-based dashboard layouts don't make ha-card's height as
+//          fully "definite" as plain block-context CSS rules assume, a known
+//          MDN-documented caveat for aspect-ratio in flex/grid contexts).
+//          Tried gating on the HA-provided `preview` property instead, but
+//          console verification showed it reflects "dashboard is in edit
+//          mode" broadly, not "this is the dialog preview" specifically
+//          (both the dashboard and dialog instances reported preview=true
+//          simultaneously) — so that signal was also wrong. Replaced both
+//          with isInsideEditDialog(), a ground-truth DOM-ancestry check for
+//          the literal <ha-dialog> element, walking up through shadow-DOM
+//          boundaries via getRootNode().host. connectedCallback() now sets
+//          --editor-preview-aspect-ratio to EDITOR_PREVIEW_ASPECT_RATIO only
+//          when that check is true, else 'auto' (no effect). ha-card's static
+//          CSS reads that custom property instead of the constant directly;
+//          unsafeCSS import removed as it's no longer needed.
 // v0.0.12: Editor preview now uses a 16/10 aspect ratio (most photos are
 //          roughly that shape) instead of an arbitrary min-height:200px floor.
 //          Added EDITOR_PREVIEW_ASPECT_RATIO constant (CSS <ratio> syntax) and
@@ -171,14 +188,29 @@ const DEFAULT_ZONE_MODES = {
 // this baseline via ResizeObserver — see _scaleFactor.
 const REFERENCE_HEIGHT_PX = 400;
 
-// Aspect ratio (CSS <ratio> syntax, e.g. '16 / 10') applied to ha-card. Only
-// takes effect where height is otherwise undetermined — i.e. the HA card
-// editor preview, which has a definite width but no definite height to
-// resolve ha-card's height:100% against. Has no effect on the real dashboard,
-// where the surrounding container already gives ha-card a definite height
-// (CSS aspect-ratio is ignored whenever both dimensions are already
-// definite). Change this value to change the preview's proportions.
+// Aspect ratio (CSS <ratio> syntax, e.g. '16 / 10') applied to ha-card, but
+// ONLY when the card is rendered inside the HA edit-card dialog's preview
+// (see isInsideEditDialog below) — never on the real dashboard. Earlier
+// attempts gated this on CSS auto-sizing behavior, then on a `preview`
+// property; both were unreliable (the property turned out to mean "dashboard
+// is in edit mode" broadly, not "this is the dialog preview" specifically).
+// Checking the actual DOM ancestry for the dialog element itself is the only
+// ground-truth signal. Change this value to change the preview's proportions.
 const EDITOR_PREVIEW_ASPECT_RATIO = '16 / 10';
+
+// Walks up through the DOM — crossing shadow-DOM boundaries via
+// getRootNode().host when parentElement runs out — checking whether el is
+// nested inside the actual <ha-dialog> element HA uses for the per-card edit
+// dialog. This is a ground-truth DOM check, not an inference from CSS sizing
+// behavior or from HA-provided properties of uncertain scope.
+function isInsideEditDialog(el) {
+  let node = el;
+  while (node) {
+    if (node.tagName === 'HA-DIALOG') return true;
+    node = node.parentElement || node.getRootNode()?.host;
+  }
+  return false;
+}
 
 const DEFAULT_CONFIG = {
   entity:                'sensor.',
@@ -1919,6 +1951,11 @@ class ChronoSlideshowCard extends LitElement {
     }
     this._startTimer();
 
+    this.style.setProperty(
+      '--editor-preview-aspect-ratio',
+      isInsideEditDialog(this) ? EDITOR_PREVIEW_ASPECT_RATIO : 'auto'
+    );
+
     this._resizeObserver = new ResizeObserver(entries => {
       const height = entries[0]?.contentRect?.height;
       if (!height) return;
@@ -2343,7 +2380,7 @@ class ChronoSlideshowCard extends LitElement {
       width: 100%;
       height: 100%;
       min-height: 200px;
-      aspect-ratio: ${unsafeCSS(EDITOR_PREVIEW_ASPECT_RATIO)};
+      aspect-ratio: var(--editor-preview-aspect-ratio, auto);
       overflow: hidden;
       box-sizing: border-box;
     }
