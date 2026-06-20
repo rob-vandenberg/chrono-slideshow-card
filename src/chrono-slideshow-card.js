@@ -6,12 +6,24 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.21';
+const CARD_VERSION = '0.0.22';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.22: Fix: mouse-driven swipes didn't work (touch was less affected by
+//          sheer geometry, not because it was actually safe). Two
+//          independent causes, both fixed: (1) the "stop sign" cursor during
+//          a drag confirmed the browser's native HTML5 image drag-and-drop
+//          was hijacking the gesture — <img> is draggable by default; added
+//          draggable="false" to .slide-image. (2) Without
+//          setPointerCapture(), a drag whose cursor strays outside
+//          .slideshow-container's bounds (easy with a mouse) stops
+//          delivering pointermove/pointerup to it entirely — added
+//          el.setPointerCapture(e.pointerId) in _onPointerDown, releasing
+//          automatically on pointerup/pointercancel per spec, no extra
+//          cleanup needed.
 // v0.0.21: Fix: occasionally, after a transition, neither slide-unit painted
 //          anything — confirmed via console (getComputedStyle showed the
 //          front unit stuck at opacity:0 plus a stale translateY from a
@@ -2336,6 +2348,7 @@ class ChronoSlideshowCard extends LitElement {
   //    tap support desktop dashboards, not just touchscreens). ────────────
   _onPointerDown(e) {
     if (this._transitioning) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
     this._touchStartX = e.clientX;
     this._touchStartY = e.clientY;
     this._holdFired = false;
@@ -2620,6 +2633,7 @@ class ChronoSlideshowCard extends LitElement {
           class="slide-image"
           src="${photo.fileURL}"
           style=${styleMap(imgStyles)}
+          draggable="false"
           @error=${() => this._onImageError(photo)}
         >
         ${this._renderZoneGrid('dynamic', indexOf)}
