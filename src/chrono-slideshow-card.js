@@ -6,12 +6,33 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.20';
+const CARD_VERSION = '0.0.21';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.21: Fix: occasionally, after a transition, neither slide-unit painted
+//          anything — confirmed via console (getComputedStyle showed the
+//          front unit stuck at opacity:0 plus a stale translateY from a
+//          completely different transition type, and a magenta
+//          letterbox_color test confirmed the native ha-card background was
+//          showing through both units, not either one's own background —
+//          i.e. leftover effects from earlier cycles, not a broken image
+//          source). Root cause not fully pinned down (.cancel() should have
+//          cleared old animations but evidently didn't always), so rather
+//          than continue chasing that, every transition's keyframes now
+//          explicitly pin all of opacity/transform/clipPath/maskImage on
+//          every frame — not just the one property that transition actually
+//          cares about. Per the Web Animations API's composite order, a
+//          newly-started animation explicitly setting a property takes
+//          priority over any older still-active one for that property
+//          regardless of whether it was cancelled — so every cycle now
+//          fully self-clears all visual state on its own, independent of
+//          whether the .cancel() calls (kept as a first line of defense)
+//          caught everything. Clock's exiting unit now also gets an
+//          explicit (no-op shape, all-neutral) animation for the same
+//          reason, instead of relying solely on cancellation.
 // v0.0.20: Fix regression from 0.0.19: any swipe (horizontal or vertical)
 //          slower than HOLD_MS (500ms) was silently suppressed, because the
 //          hold timer ran on pure elapsed time with no awareness of
@@ -2623,41 +2644,53 @@ class ChronoSlideshowCard extends LitElement {
     this._animationStartedFor = this._transitionId;
 
     // Both slide-units persist across every transition now (never recreated),
-    // so a previous cycle's finished, fill:'forwards' animation — and, for
-    // the clock transition, its directly-set maskImage — could still be
-    // lingering on them. Clear both before starting a clean one.
+    // so a previous cycle's finished, fill:'forwards' animation could still
+    // be lingering on them. Cancel as a first line of defense — but a plain
+    // .cancel() relies on correctly finding every old animation, and isn't
+    // fully trusted as the only safeguard (see the keyframe design below).
     exitingEl.getAnimations().forEach(a => a.cancel());
     enteringEl.getAnimations().forEach(a => a.cancel());
-    exitingEl.style.maskImage = exitingEl.style.webkitMaskImage = '';
-    enteringEl.style.maskImage = enteringEl.style.webkitMaskImage = '';
 
     const transitionName = this._resolvedTransitionName ?? 'fade';
     const durationMs       = Math.max(0, (this._config?.transition_duration ?? 0.6)) * 1000;
     const easing           = 'ease';
 
+    // Every keyframe below explicitly states all of opacity/transform/
+    // clipPath/maskImage — not just the one property a given transition
+    // actually cares about. This is the real fix, independent of whatever
+    // the exact reason .cancel() above might occasionally miss something:
+    // per the Web Animations API's composite order, a newly-started
+    // animation that explicitly sets a property takes priority over any
+    // older, still-active one for that same property, cancelled or not. So
+    // every transition now fully self-clears all visual state every single
+    // cycle, instead of only touching its own property and trusting
+    // whatever else was already cleared.
+    const NEUTRAL = { opacity: 1, transform: 'translate(0,0)', clipPath: 'inset(0 0 0 0)', maskImage: 'none', webkitMaskImage: 'none' };
+
     if (transitionName === 'fade') {
-      exitingEl.animate(  [{ opacity: 1 }, { opacity: 0 }], { duration: durationMs, easing, fill: 'forwards' });
-      enteringEl.animate( [{ opacity: 0 }, { opacity: 1 }], { duration: durationMs, easing, fill: 'forwards' });
+      exitingEl.animate(  [{ ...NEUTRAL, opacity: 1 }, { ...NEUTRAL, opacity: 0 }], { duration: durationMs, easing, fill: 'forwards' });
+      enteringEl.animate( [{ ...NEUTRAL, opacity: 0 }, { ...NEUTRAL, opacity: 1 }], { duration: durationMs, easing, fill: 'forwards' });
     } else if (transitionName.startsWith('slide-')) {
       const exitTo   = TRANSITION_EXIT_TRANSFORM[transitionName]       ?? 'translateX(-100%)';
       const enterFrom = TRANSITION_ENTER_FROM_TRANSFORM[transitionName] ?? 'translateX(100%)';
-      exitingEl.animate(  [{ transform: 'translate(0,0)' }, { transform: exitTo }],    { duration: durationMs, easing, fill: 'forwards' });
-      enteringEl.animate( [{ transform: enterFrom },        { transform: 'translate(0,0)' }], { duration: durationMs, easing, fill: 'forwards' });
+      exitingEl.animate(  [{ ...NEUTRAL, transform: 'translate(0,0)' }, { ...NEUTRAL, transform: exitTo }],   { duration: durationMs, easing, fill: 'forwards' });
+      enteringEl.animate( [{ ...NEUTRAL, transform: enterFrom },        { ...NEUTRAL, transform: 'translate(0,0)' }], { duration: durationMs, easing, fill: 'forwards' });
     } else if (transitionName === 'curtain') {
-      exitingEl.animate(  [{ clipPath: 'inset(0 0 0 0)' },   { clipPath: 'inset(0 0 0 100%)' }], { duration: durationMs, easing, fill: 'forwards' });
-      enteringEl.animate( [{ clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0 0 0)' }],     { duration: durationMs, easing, fill: 'forwards' });
+      exitingEl.animate(  [{ ...NEUTRAL, clipPath: 'inset(0 0 0 0)' },   { ...NEUTRAL, clipPath: 'inset(0 0 0 100%)' }], { duration: durationMs, easing, fill: 'forwards' });
+      enteringEl.animate( [{ ...NEUTRAL, clipPath: 'inset(0 100% 0 0)' }, { ...NEUTRAL, clipPath: 'inset(0 0 0 0)' }],     { duration: durationMs, easing, fill: 'forwards' });
     } else if (transitionName === 'clock') {
       // Radial wipe via a conic-gradient mask sweeping 0→360deg. Entering unit
-      // sweeps the reveal in; exiting unit is simply revealed-through (no
-      // separate animation needed — it shows wherever the entering unit's
-      // mask has not yet covered).
-      enteringEl.style.maskImage    = 'conic-gradient(from 0deg, #000 0deg, transparent 0deg)';
-      enteringEl.style.webkitMaskImage = enteringEl.style.maskImage;
+      // sweeps the reveal in; exiting unit gets an explicit no-op animation
+      // (every frame identical, all neutral) purely so it also claims
+      // compositing priority for opacity/transform/clipPath/mask for the
+      // full duration — consistent with every other transition, rather than
+      // being the one branch that relies solely on .cancel() above.
+      exitingEl.animate( [{ ...NEUTRAL }, { ...NEUTRAL }], { duration: durationMs, fill: 'forwards' });
       const steps = 60;
       const frames = Array.from({ length: steps + 1 }, (_, i) => {
         const deg = (360 * i) / steps;
         const grad = `conic-gradient(from 0deg, #000 ${deg}deg, transparent ${deg}deg)`;
-        return { maskImage: grad, webkitMaskImage: grad };
+        return { ...NEUTRAL, maskImage: grad, webkitMaskImage: grad };
       });
       enteringEl.animate(frames, { duration: durationMs, easing: 'linear', fill: 'forwards' });
     }
