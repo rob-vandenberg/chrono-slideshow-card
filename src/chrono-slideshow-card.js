@@ -6,12 +6,22 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.19';
+const CARD_VERSION = '0.0.20';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.20: Fix regression from 0.0.19: any swipe (horizontal or vertical)
+//          slower than HOLD_MS (500ms) was silently suppressed, because the
+//          hold timer ran on pure elapsed time with no awareness of
+//          movement, fired first, set _holdFired, and the swipe branches in
+//          _onPointerUp explicitly skip when hold already fired. Added
+//          _onPointerMove, bound alongside the existing pointer handlers,
+//          which cancels the hold timer (without marking hold as fired) as
+//          soon as movement crosses SWIPE_THRESHOLD — a swipe of any speed
+//          now resolves correctly on release; only a genuinely stationary
+//          press still becomes a hold.
 // v0.0.19: New card-body gesture system, replacing touch-only swipe detection
 //          with unified Pointer Events (mouse, touch, pen — avoids double-
 //          firing on touch devices that also synthesize mouse events).
@@ -2358,6 +2368,21 @@ class ChronoSlideshowCard extends LitElement {
     if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
   }
 
+  // Cancels the hold timer once movement clearly indicates a swipe is
+  // underway, rather than letting hold fire on pure elapsed time regardless
+  // of movement — a swipe slower than HOLD_MS would otherwise get suppressed
+  // by hold firing first. Does not set _holdFired — the gesture stays
+  // eligible to resolve as a swipe on release.
+  _onPointerMove(e) {
+    if (this._touchStartX === null || !this._holdTimer) return;
+    const dx = e.clientX - this._touchStartX;
+    const dy = e.clientY - this._touchStartY;
+    if (Math.abs(dx) >= SWIPE_THRESHOLD || Math.abs(dy) >= SWIPE_THRESHOLD) {
+      clearTimeout(this._holdTimer);
+      this._holdTimer = null;
+    }
+  }
+
   // ── Template/entity subscriptions for dynamic overlay items ─────────────
   // For each template item, run substitutePhotoVariables against the current
   // photo's data first. It reports whether every {{ }} block in the template
@@ -2870,6 +2895,7 @@ class ChronoSlideshowCard extends LitElement {
         <div
           class="slideshow-container"
           @pointerdown=${(e) => this._onPointerDown(e)}
+          @pointermove=${(e) => this._onPointerMove(e)}
           @pointerup=${(e) => this._onPointerUp(e)}
           @pointercancel=${() => this._onPointerCancel()}
         >
