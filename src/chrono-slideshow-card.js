@@ -6,12 +6,35 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.18';
+const CARD_VERSION = '0.0.19';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.19: New card-body gesture system, replacing touch-only swipe detection
+//          with unified Pointer Events (mouse, touch, pen — avoids double-
+//          firing on touch devices that also synthesize mouse events).
+//          - Tap: hardcoded pause/resume toggle (_togglePause), NOT part of
+//            the generic action system — tap_action is deliberately no
+//            longer read at the card level (still works for per-item
+//            tap_action, unrelated, unchanged). Shows/hides a pause
+//            indicator (circle, 2px border, mdi:pause icon, centered
+//            horizontally, 3/4 down vertically) sized via --scale-factor
+//            like everything else.
+//          - Hold, double-tap, swipe-up, swipe-down: fully generic and user-
+//            configurable via hold_action/double_tap_action/
+//            swipe_up_action/swipe_down_action, dispatched through the
+//            existing handleAction() (extended with swipe_up/swipe_down
+//            branches) — no card-specific behavior, same as before.
+//          - Horizontal swipe (left/right) still does next/prev navigation,
+//            unchanged.
+//          - .slideshow-container's touch-action changed from pan-y to none
+//            — vertical gestures are now captured for swipe_up/down instead
+//            of being passed through to page scroll (explicitly accepted
+//            trade-off).
+//          - _startTimer() now no-ops while paused, so _restartTimer() calls
+//            from manual navigation don't inadvertently resume autoplay.
 // v0.0.18: New transition option: Random — picks one real transition (from
 //          fade/slide-left/right/up/down/curtain/clock, deliberately
 //          excluding none and random itself) once per advance via the new
@@ -290,6 +313,14 @@ function isInsideEditDialog(el) {
   return false;
 }
 
+// Gesture recognition on the card body (distinct from per-item tap_action,
+// which still goes through plain @click). HOLD_MS matches HA's own
+// long-press convention; DOUBLE_TAP_MS is the window a second tap must land
+// within to count as a double-tap instead of two separate single taps.
+const HOLD_MS         = 500;
+const DOUBLE_TAP_MS   = 250;
+const SWIPE_THRESHOLD = 40; // px
+
 const DEFAULT_CONFIG = {
   entity:                'sensor.',
   sort_by:               'filename',
@@ -327,6 +358,9 @@ const UI_CARD_KEYS = new Set([
   'type', 'entity', 'sort_by', 'sort_reverse', 'display_time',
   'transition', 'transition_duration', 'fit_mode', 'letterbox_color', 'zone_modes',
   'items',
+  // tap is hardcoded to pause/resume now, not part of the generic action
+  // system — tap_action is deliberately not in this list, it's never read.
+  'hold_action', 'double_tap_action', 'swipe_up_action', 'swipe_down_action',
 ]);
 
 const VERTICAL_OPTIONS = [
@@ -521,6 +555,10 @@ function handleAction(node, hass, config, action) {
     actionConfig = config.hold_action;
   } else if (action === 'tap' && config.tap_action) {
     actionConfig = config.tap_action;
+  } else if (action === 'swipe_up' && config.swipe_up_action) {
+    actionConfig = config.swipe_up_action;
+  } else if (action === 'swipe_down' && config.swipe_down_action) {
+    actionConfig = config.swipe_down_action;
   }
   if (!actionConfig) actionConfig = { action: 'none' };
 
@@ -1965,6 +2003,7 @@ class ChronoSlideshowCard extends LitElement {
     _loadError:     { state: true },
     _swipeOffset:   { state: true },
     _transitioning: { state: true },
+    _paused:        { state: true },
     _frontSlotId:   { state: true },
     _slotPhotoA:    { state: true },
     _slotPhotoB:    { state: true },
@@ -1995,6 +2034,11 @@ class ChronoSlideshowCard extends LitElement {
     this._loadError        = null;
     this._swipeOffset      = 0;
     this._transitioning    = false;
+    this._paused           = false;
+    this._holdTimer        = null;
+    this._holdFired        = false;
+    this._lastTapTime      = 0;
+    this._pendingTapTimer  = null;
     this._itemSubs         = new Map(); // key → { substituted, unsub }
     this._subscribed       = false;
     this._timer            = null;
@@ -2157,7 +2201,7 @@ class ChronoSlideshowCard extends LitElement {
 
   // ── Timer: advance to next photo every display_time seconds ─────────────
   _startTimer() {
-    if (this._timer) return;
+    if (this._timer || this._paused) return;
     const seconds = Math.max(1, this._config?.display_time ?? 8);
     this._timer = setInterval(() => this._advance(), seconds * 1000);
   }
@@ -2243,29 +2287,75 @@ class ChronoSlideshowCard extends LitElement {
   }
 
   // ── Swipe handling (touch) ────────────────────────────────────────────────
-  _onTouchStart(e) {
-    if (this._transitioning) return;
-    const t = e.changedTouches[0];
-    this._touchStartX = t.clientX;
-    this._touchStartY = t.clientY;
+  // ── Tap anywhere on the card body toggles pause/resume. Hardcoded, not
+  //    part of the generic user-configurable action system — see the
+  //    pointer handlers below for why tap was carved out specifically. ────
+  _togglePause() {
+    this._paused = !this._paused;
+    if (this._paused) {
+      this._stopTimer();
+    } else {
+      this._restartTimer();
+    }
   }
 
-  _onTouchEnd(e) {
+  // ── Unified gesture recognition via Pointer Events (mouse, touch, and pen
+  //    all fire the same events — avoids the double-firing risk of binding
+  //    separate touch and mouse handlers, and is what makes tap/hold/double-
+  //    tap support desktop dashboards, not just touchscreens). ────────────
+  _onPointerDown(e) {
+    if (this._transitioning) return;
+    this._touchStartX = e.clientX;
+    this._touchStartY = e.clientY;
+    this._holdFired = false;
+    if (this._holdTimer) clearTimeout(this._holdTimer);
+    this._holdTimer = setTimeout(() => {
+      this._holdFired = true;
+      this._handleAction(this._config, 'hold');
+    }, HOLD_MS);
+  }
+
+  _onPointerUp(e) {
     if (this._touchStartX === null) return;
-    const t  = e.changedTouches[0];
-    const dx = t.clientX - this._touchStartX;
-    const dy = t.clientY - this._touchStartY;
+    const dx = e.clientX - this._touchStartX;
+    const dy = e.clientY - this._touchStartY;
     this._touchStartX = null;
     this._touchStartY = null;
+    if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
 
-    const SWIPE_THRESHOLD = 40; // px
-    if (Math.abs(dx) < SWIPE_THRESHOLD || Math.abs(dx) < Math.abs(dy)) return;
+    const horizontalSwipe = Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) >= Math.abs(dy);
+    const verticalSwipe   = Math.abs(dy) >= SWIPE_THRESHOLD && Math.abs(dy) >  Math.abs(dx);
 
-    if (dx < 0) {
-      this._manualNavigate(1);  // swipe left → next
-    } else {
-      this._manualNavigate(-1); // swipe right → previous
+    if (horizontalSwipe) {
+      if (!this._holdFired) this._manualNavigate(dx < 0 ? 1 : -1); // swipe left → next, right → previous
+      return;
     }
+    if (verticalSwipe) {
+      if (!this._holdFired) this._handleAction(this._config, dy < 0 ? 'swipe_up' : 'swipe_down');
+      return;
+    }
+    if (this._holdFired) return; // hold already handled this press/release
+
+    // Neither swipe nor hold — single tap, or the second tap of a double-tap.
+    const now = Date.now();
+    if (now - this._lastTapTime < DOUBLE_TAP_MS) {
+      this._lastTapTime = 0;
+      if (this._pendingTapTimer) { clearTimeout(this._pendingTapTimer); this._pendingTapTimer = null; }
+      this._handleAction(this._config, 'double_tap');
+      return;
+    }
+    this._lastTapTime = now;
+    if (this._pendingTapTimer) clearTimeout(this._pendingTapTimer);
+    this._pendingTapTimer = setTimeout(() => {
+      this._pendingTapTimer = null;
+      this._togglePause(); // tap is hardcoded to pause/resume, not user-configurable
+    }, DOUBLE_TAP_MS);
+  }
+
+  _onPointerCancel() {
+    this._touchStartX = null;
+    this._touchStartY = null;
+    if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
   }
 
   // ── Template/entity subscriptions for dynamic overlay items ─────────────
@@ -2572,7 +2662,29 @@ class ChronoSlideshowCard extends LitElement {
       position: absolute;
       inset: 0;
       overflow: hidden;
-      touch-action: pan-y;
+      touch-action: none;
+    }
+
+    /* ── Pause indicator: shown on tap-to-pause, hidden on tap-to-resume ──── */
+    .pause-indicator {
+      position: absolute;
+      left: 50%;
+      top: 75%;
+      transform: translate(-50%, -50%);
+      width: calc(64px * var(--scale-factor, 1));
+      height: calc(64px * var(--scale-factor, 1));
+      border-radius: 50%;
+      border: calc(2px * var(--scale-factor, 1)) solid white;
+      background: rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 4;
+      pointer-events: none;
+    }
+    .pause-indicator ha-icon {
+      --mdc-icon-size: calc(36px * var(--scale-factor, 1));
+      color: white;
     }
 
     /* ── Static overlay layer: outside the transitioning subtree ────────────── */
@@ -2757,8 +2869,9 @@ class ChronoSlideshowCard extends LitElement {
       <ha-card>
         <div
           class="slideshow-container"
-          @touchstart=${(e) => this._onTouchStart(e)}
-          @touchend=${(e) => this._onTouchEnd(e)}
+          @pointerdown=${(e) => this._onPointerDown(e)}
+          @pointerup=${(e) => this._onPointerUp(e)}
+          @pointercancel=${() => this._onPointerCancel()}
         >
           ${this._renderZoneGrid('static', itemIndex)}
 
@@ -2766,6 +2879,12 @@ class ChronoSlideshowCard extends LitElement {
             ${this._renderSlideUnit(this._slotPhotoA, itemIndex, fitMode, this._frontSlotId === 'A' ? 'front' : 'back')}
             ${this._renderSlideUnit(this._slotPhotoB, itemIndex, fitMode, this._frontSlotId === 'B' ? 'front' : 'back')}
           </div>
+
+          ${this._paused ? html`
+            <div class="pause-indicator">
+              <ha-icon icon="mdi:pause"></ha-icon>
+            </div>
+          ` : ''}
 
           ${this._loadError ? html`
             <div class="message-overlay">
