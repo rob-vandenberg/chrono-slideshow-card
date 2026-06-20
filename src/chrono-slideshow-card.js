@@ -6,12 +6,21 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.17';
+const CARD_VERSION = '0.0.18';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.18: New transition option: Random — picks one real transition (from
+//          fade/slide-left/right/up/down/curtain/clock, deliberately
+//          excluding none and random itself) once per advance via the new
+//          pickRandomTransition(). Stored in _resolvedTransitionName so
+//          _runTransitionAnimations() uses the exact same pick rather than
+//          independently re-rolling and risking a mismatched animation.
+//          Dropdown reordered: None first, Random last, real transitions in
+//          between (previously None was last). Also removed a stale leftover
+//          doc comment on _advance() describing the pre-0.0.16 model.
 // v0.0.17: Fix regression from 0.0.16: with fit_mode 'contain', a photo
 //          smaller than its box leaves transparent letterbox margins — the
 //          <img> itself paints nothing there. Harmless in the old model
@@ -340,6 +349,7 @@ const SORT_BY_OPTIONS = [
 ];
 
 const TRANSITION_OPTIONS = [
+  { label: 'None',        value: 'none'        },
   { label: 'Fade',        value: 'fade'        },
   { label: 'Slide left',  value: 'slide-left'  },
   { label: 'Slide right', value: 'slide-right' },
@@ -347,8 +357,17 @@ const TRANSITION_OPTIONS = [
   { label: 'Slide down',  value: 'slide-down'  },
   { label: 'Curtain',     value: 'curtain'     },
   { label: 'Clock',       value: 'clock'       },
-  { label: 'None',        value: 'none'        },
+  { label: 'Random',      value: 'random'      },
 ];
+
+// Real transitions 'random' picks from — deliberately excludes 'none' and
+// 'random' itself, since picking "Random" is specifically asking for an
+// actual transition every time, not occasionally getting none.
+const RANDOM_TRANSITION_POOL = ['fade', 'slide-left', 'slide-right', 'slide-up', 'slide-down', 'curtain', 'clock'];
+
+function pickRandomTransition() {
+  return RANDOM_TRANSITION_POOL[Math.floor(Math.random() * RANDOM_TRANSITION_POOL.length)];
+}
 
 const FIT_MODE_OPTIONS = [
   { label: 'Cover',   value: 'cover'   },
@@ -1985,9 +2004,10 @@ class ChronoSlideshowCard extends LitElement {
     this._frontSlotId         = 'A';   // which persistent slot ('A' or 'B') is currently visible/front
     this._slotPhotoA          = null;  // photo currently bound to persistent slot A
     this._slotPhotoB          = null;  // photo currently bound to persistent slot B
-    this._transitionTimeoutId = null;
-    this._animationStartedFor = null;
-    this._transitionId        = 0;
+    this._transitionTimeoutId   = null;
+    this._animationStartedFor   = null;
+    this._resolvedTransitionName = 'fade'; // settles a 'random' pick once per advance, shared with _runTransitionAnimations
+    this._transitionId          = 0;
     this._resizeObserver      = null;
   }
 
@@ -2154,20 +2174,20 @@ class ChronoSlideshowCard extends LitElement {
     this._startTimer();
   }
 
-  // ── Advance the slideshow by +1 (next) or -1 (previous), looping ────────
-  // Captures the outgoing photo and direction so render() can draw both the
-  // exiting and entering slide-units for the duration of the CSS transition,
-  // then settles back to a single slide-unit once it completes.
   // ── Advance to the next photo, autonomously (timer-driven only). Always
   //    forward. If a real transition is configured, swaps which persistent
   //    slot is "front" — both slide-units already exist and are already
   //    painted, so nothing is created fresh at the moment the animation
   //    starts. If transition is 'none', just syncs both slots with no
-  //    animation. ─────────────────────────────────────────────────────────
+  //    animation. 'random' resolves to one real transition per advance,
+  //    stored in _resolvedTransitionName so _runTransitionAnimations() uses
+  //    that exact pick instead of re-rolling independently. ───────────────
   _advance() {
     if (this._files.length === 0 || this._transitioning) return;
     const n = this._files.length;
-    const transitionName = this._config?.transition ?? 'fade';
+    const configured      = this._config?.transition ?? 'fade';
+    const transitionName  = configured === 'random' ? pickRandomTransition() : configured;
+    this._resolvedTransitionName = transitionName;
 
     this._currentIndex   = (this._currentIndex + 1) % n;
     this._loadError       = null;
@@ -2496,7 +2516,7 @@ class ChronoSlideshowCard extends LitElement {
     exitingEl.style.maskImage = exitingEl.style.webkitMaskImage = '';
     enteringEl.style.maskImage = enteringEl.style.webkitMaskImage = '';
 
-    const transitionName = this._config?.transition ?? 'fade';
+    const transitionName = this._resolvedTransitionName ?? 'fade';
     const durationMs       = Math.max(0, (this._config?.transition_duration ?? 0.6)) * 1000;
     const easing           = 'ease';
 
