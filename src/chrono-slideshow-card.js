@@ -6,12 +6,23 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.16';
+const CARD_VERSION = '0.0.17';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.17: Fix regression from 0.0.16: with fit_mode 'contain', a photo
+//          smaller than its box leaves transparent letterbox margins — the
+//          <img> itself paints nothing there. Harmless in the old model
+//          (nothing existed behind it), but the new persistent back slot
+//          means a different photo could now show through those gaps. Added
+//          a configurable letterbox_color (DEFAULT_CONFIG, UI_CARD_KEYS, new
+//          editor field next to Fit mode) applied as background-color on
+//          .slide-image, falling back to var(--card-background-color,
+//          #1c1c1c) when unset — same pattern already used for
+//          message-overlay, so it matches the dashboard theme by default
+//          while staying user-configurable.
 // v0.0.16: Restructured photo transitions to fix a startup hiccup at the
 //          beginning of every autonomous transition. Root cause: the
 //          "entering" slide-unit was created fresh, in the same render tick
@@ -278,6 +289,7 @@ const DEFAULT_CONFIG = {
   transition:             'fade',
   transition_duration:    0.6,
   fit_mode:               'contain',
+  letterbox_color:        '',
   zone_modes:             { ...DEFAULT_ZONE_MODES },
   items:                  [],
 };
@@ -304,7 +316,7 @@ const UI_ITEM_KEYS = new Set([
 
 const UI_CARD_KEYS = new Set([
   'type', 'entity', 'sort_by', 'sort_reverse', 'display_time',
-  'transition', 'transition_duration', 'fit_mode', 'zone_modes',
+  'transition', 'transition_duration', 'fit_mode', 'letterbox_color', 'zone_modes',
   'items',
 ]);
 
@@ -1835,6 +1847,12 @@ class ChronoSlideshowCardEditor extends LitElement {
           ${csSelectField('Fit mode', c.fit_mode ?? 'contain', this._fitModeOptions, e => this._valueChanged('fit_mode', e))}
         </div>
 
+        <!-- Letterbox color: fills any gap left by 'contain' fit mode, also
+             what shows through from the pre-warmed next photo behind it -->
+        <div class="card-row">
+          ${csColorPicker('Letterbox color', c.letterbox_color ?? '', e => this._valueChanged('letterbox_color', e))}
+        </div>
+
         <!-- Transition + transition duration -->
         <div class="card-row">
           ${csSelectField('Transition', c.transition ?? 'fade', this._transitionOptions, e => this._valueChanged('transition', e))}
@@ -2439,7 +2457,7 @@ class ChronoSlideshowCard extends LitElement {
   //    _runTransitionAnimations() via the Web Animations API — see updated().
   _renderSlideUnit(photo, indexOf, fitMode, role) {
     if (!photo) return html``;
-    const imgStyles = { 'object-fit': fitMode };
+    const imgStyles = { 'object-fit': fitMode, 'background-color': this._config?.letterbox_color || undefined };
     return html`
       <div class="slide-unit" data-role="${role ?? ''}">
         <img
@@ -2563,6 +2581,7 @@ class ChronoSlideshowCard extends LitElement {
       display: block;
       width: 100%;
       height: 100%;
+      background-color: var(--card-background-color, #1c1c1c);
     }
 
     /* ── Dynamic overlay layer: inside each slide unit, rides with it ───────── */
