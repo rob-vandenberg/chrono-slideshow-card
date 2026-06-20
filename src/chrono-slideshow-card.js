@@ -6,12 +6,38 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.15';
+const CARD_VERSION = '0.0.16';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.16: Restructured photo transitions to fix a startup hiccup at the
+//          beginning of every autonomous transition. Root cause: the
+//          "entering" slide-unit was created fresh, in the same render tick
+//          .animate() was called on it — a brand-new DOM node's first paint
+//          and compositor-layer promotion landing in the same frame as
+//          animation start. Fix: two persistent slide-units ("front"/"back")
+//          now always exist in the DOM — front is visible, back is hidden
+//          behind it, pre-loaded with the next photo from the moment the
+//          current photo starts displaying (the full display_time to warm
+//          up, not just an instant). An autonomous advance swaps which slot
+//          is front and animates the two already-painted elements; nothing
+//          is created at transition time. Manual swipe navigation never
+//          animates at all now (per explicit design decision: transitions
+//          are autonomous-playback-only) — it's an instant cut via the new
+//          _syncSlotsInstant(), and only ever has current+next in memory,
+//          never prev (matches the existing preload philosophy).
+//          _outgoingPhoto/_transitionDirection removed (obsolete with this
+//          model); _advance() now takes no parameter (always forward,
+//          autonomous-only); new _manualNavigate(direction) handles swipes.
+//          Since both slide-units now persist forever instead of being
+//          destroyed each cycle, _runTransitionAnimations() now explicitly
+//          cancels any previous finished animation and clears the clock
+//          transition's directly-set maskImage before starting a new one —
+//          necessary now that elements are reused, harmless before. Added
+//          will-change: transform, opacity, clip-path to .slide-unit as a
+//          complementary, independent mitigation.
 // v0.0.15: New field: text_shadow_layers (default 2), YAML-only, no dedicated
 //          UI field — deliberately not added to NUMERIC_ITEM_KEYS since that
 //          set is only consulted by the dedicated-UI-field change handler;
@@ -1902,6 +1928,9 @@ class ChronoSlideshowCard extends LitElement {
     _loadError:     { state: true },
     _swipeOffset:   { state: true },
     _transitioning: { state: true },
+    _frontSlotId:   { state: true },
+    _slotPhotoA:    { state: true },
+    _slotPhotoB:    { state: true },
   };
 
   static getCardSize() {
@@ -1935,8 +1964,9 @@ class ChronoSlideshowCard extends LitElement {
     this._touchStartX      = null;
     this._touchStartY      = null;
     this._preloadedImages  = new Map(); // fileURL/filePath → Image object, cache for prev/current/next
-    this._outgoingPhoto       = null;
-    this._transitionDirection = 1;
+    this._frontSlotId         = 'A';   // which persistent slot ('A' or 'B') is currently visible/front
+    this._slotPhotoA          = null;  // photo currently bound to persistent slot A
+    this._slotPhotoB          = null;  // photo currently bound to persistent slot B
     this._transitionTimeoutId = null;
     this._animationStartedFor = null;
     this._transitionId        = 0;
@@ -2034,6 +2064,8 @@ class ChronoSlideshowCard extends LitElement {
     this._currentIndex  = 0;
     this._loadError      = null;
     this._preloadedImages.clear();
+    this._frontSlotId    = 'A';
+    this._syncSlotsInstant();
 
     this._setupSubscriptions();
     this._preloadNeighbors();
@@ -2071,11 +2103,25 @@ class ChronoSlideshowCard extends LitElement {
     }
   }
 
+  // ── Make the front slot show the current photo and the back slot show the
+  //    next photo, with no animation. Used on initial load, for manual
+  //    navigation (which never animates), and for transition:'none'. Leaves
+  //    _frontSlotId untouched — only the two slots' photo bindings change.
+  _syncSlotsInstant() {
+    if (this._frontSlotId === 'A') {
+      this._slotPhotoA = this._currentPhoto;
+      this._slotPhotoB = this._nextPhoto;
+    } else {
+      this._slotPhotoB = this._currentPhoto;
+      this._slotPhotoA = this._nextPhoto;
+    }
+  }
+
   // ── Timer: advance to next photo every display_time seconds ─────────────
   _startTimer() {
     if (this._timer) return;
     const seconds = Math.max(1, this._config?.display_time ?? 8);
-    this._timer = setInterval(() => this._advance(1), seconds * 1000);
+    this._timer = setInterval(() => this._advance(), seconds * 1000);
   }
 
   _stopTimer() {
@@ -2094,38 +2140,68 @@ class ChronoSlideshowCard extends LitElement {
   // Captures the outgoing photo and direction so render() can draw both the
   // exiting and entering slide-units for the duration of the CSS transition,
   // then settles back to a single slide-unit once it completes.
-  _advance(direction) {
+  // ── Advance to the next photo, autonomously (timer-driven only). Always
+  //    forward. If a real transition is configured, swaps which persistent
+  //    slot is "front" — both slide-units already exist and are already
+  //    painted, so nothing is created fresh at the moment the animation
+  //    starts. If transition is 'none', just syncs both slots with no
+  //    animation. ─────────────────────────────────────────────────────────
+  _advance() {
     if (this._files.length === 0 || this._transitioning) return;
     const n = this._files.length;
-    const outgoingPhoto = this._currentPhoto;
+    const transitionName = this._config?.transition ?? 'fade';
 
-    this._currentIndex   = ((this._currentIndex + direction) % n + n) % n;
+    this._currentIndex   = (this._currentIndex + 1) % n;
     this._loadError       = null;
     this._setupSubscriptions();
     this._preloadNeighbors();
     this._restartTimer();
 
-    const transitionName = this._config?.transition ?? 'fade';
-    if (transitionName === 'none' || !outgoingPhoto) {
-      this._transitioning  = false;
-      this._outgoingPhoto  = null;
+    if (transitionName === 'none') {
+      this._syncSlotsInstant();
       this.requestUpdate();
       return;
     }
 
-    this._transitioning  = true;
-    this._outgoingPhoto  = outgoingPhoto;
-    this._transitionDirection = direction;
-    this._transitionId   = (this._transitionId ?? 0) + 1;
+    // The slot becoming front already holds the right photo — it was
+    // preloaded as "next" before the index changed, and that's exactly
+    // today's new "current". Nothing to reassign until the transition ends.
+    this._frontSlotId   = this._frontSlotId === 'A' ? 'B' : 'A';
+    this._transitioning = true;
+    this._transitionId  = (this._transitionId ?? 0) + 1;
     this.requestUpdate();
 
     const durationMs = Math.max(0, (this._config?.transition_duration ?? 0.6)) * 1000;
     if (this._transitionTimeoutId) clearTimeout(this._transitionTimeoutId);
     this._transitionTimeoutId = setTimeout(() => {
       this._transitioning = false;
-      this._outgoingPhoto = null;
+      // The slot that just became "back" is stale (held the old current
+      // photo) — give it the new "next" photo now, so it has the full
+      // display_time to warm up before its own turn as front.
+      if (this._frontSlotId === 'A') {
+        this._slotPhotoB = this._nextPhoto;
+      } else {
+        this._slotPhotoA = this._nextPhoto;
+      }
       this.requestUpdate();
     }, durationMs + 50);
+  }
+
+  // ── Manual navigation (swipe). Never animates — instant cut, per design:
+  //    transitions are only for autonomous playback. Forward swipes still
+  //    benefit from the pre-warmed back slot; backward swipes are a cold cut
+  //    since only current+next are kept in memory, never prev. ────────────
+  _manualNavigate(direction) {
+    if (this._files.length === 0 || this._transitioning) return;
+    const n = this._files.length;
+
+    this._currentIndex = ((this._currentIndex + direction) % n + n) % n;
+    this._loadError      = null;
+    this._setupSubscriptions();
+    this._preloadNeighbors();
+    this._restartTimer();
+    this._syncSlotsInstant();
+    this.requestUpdate();
   }
 
   // ── Swipe handling (touch) ────────────────────────────────────────────────
@@ -2148,9 +2224,9 @@ class ChronoSlideshowCard extends LitElement {
     if (Math.abs(dx) < SWIPE_THRESHOLD || Math.abs(dx) < Math.abs(dy)) return;
 
     if (dx < 0) {
-      this._advance(1);  // swipe left → next
+      this._manualNavigate(1);  // swipe left → next
     } else {
-      this._advance(-1); // swipe right → previous
+      this._manualNavigate(-1); // swipe right → previous
     }
   }
 
@@ -2354,11 +2430,13 @@ class ChronoSlideshowCard extends LitElement {
     this.requestUpdate();
   }
 
-  // ── Render the dynamic slide unit: image + dynamic-zone overlays, the part
-  //    that participates in the photo transition. `role` is 'exiting',
-  //    'entering', or null (no transition in progress — single static unit).
-  //    The actual animation is driven by _runTransitionAnimations() via the Web
-  //    Animations API once both units exist in the DOM — see updated(). ─────
+  // ── Render one of the two persistent slide units: image + dynamic-zone
+  //    overlays, the part that participates in the photo transition. `role`
+  //    is always 'front' (visible, top) or 'back' (hidden behind, pre-warmed
+  //    with the next photo) — both units always exist in the DOM, never
+  //    created/destroyed per transition, so nothing is ever animating a
+  //    freshly-inserted, unpainted element. The actual animation is driven by
+  //    _runTransitionAnimations() via the Web Animations API — see updated().
   _renderSlideUnit(photo, indexOf, fitMode, role) {
     if (!photo) return html``;
     const imgStyles = { 'object-fit': fitMode };
@@ -2385,14 +2463,22 @@ class ChronoSlideshowCard extends LitElement {
     if (!this._transitioning) return;
     const stack = this.shadowRoot?.querySelector('.slide-stack');
     if (!stack) return;
-    const exitingEl  = stack.querySelector('.slide-unit[data-role="exiting"]');
-    const enteringEl = stack.querySelector('.slide-unit[data-role="entering"]');
+    const exitingEl  = stack.querySelector('.slide-unit[data-role="back"]');
+    const enteringEl = stack.querySelector('.slide-unit[data-role="front"]');
     if (!exitingEl || !enteringEl) return;
     if (this._animationStartedFor === this._transitionId) return;
     this._animationStartedFor = this._transitionId;
 
+    // Both slide-units persist across every transition now (never recreated),
+    // so a previous cycle's finished, fill:'forwards' animation — and, for
+    // the clock transition, its directly-set maskImage — could still be
+    // lingering on them. Clear both before starting a clean one.
+    exitingEl.getAnimations().forEach(a => a.cancel());
+    enteringEl.getAnimations().forEach(a => a.cancel());
+    exitingEl.style.maskImage = exitingEl.style.webkitMaskImage = '';
+    enteringEl.style.maskImage = enteringEl.style.webkitMaskImage = '';
+
     const transitionName = this._config?.transition ?? 'fade';
-    const direction       = this._transitionDirection ?? 1;
     const durationMs       = Math.max(0, (this._config?.transition_duration ?? 0.6)) * 1000;
     const easing           = 'ease';
 
@@ -2422,7 +2508,7 @@ class ChronoSlideshowCard extends LitElement {
       });
       enteringEl.animate(frames, { duration: durationMs, easing: 'linear', fill: 'forwards' });
     }
-    // 'none' is handled in _advance() and never reaches here (no second unit rendered).
+    // 'none' is handled in _advance() via _syncSlotsInstant() and never reaches here.
   }
 
   updated(changedProps) {
@@ -2459,7 +2545,7 @@ class ChronoSlideshowCard extends LitElement {
       pointer-events: none;
     }
 
-    /* ── Slide stack: holds the (max 2) currently-animating slide units ─────── */
+    /* ── Slide stack: holds the two persistent slide units (front + back) ──── */
     .slide-stack {
       position: absolute;
       inset: 0;
@@ -2469,9 +2555,10 @@ class ChronoSlideshowCard extends LitElement {
     .slide-unit {
       position: absolute;
       inset: 0;
+      will-change: transform, opacity, clip-path;
     }
-    .slide-unit[data-role="exiting"]  { z-index: 1; }
-    .slide-unit[data-role="entering"] { z-index: 2; }
+    .slide-unit[data-role="back"]  { z-index: 1; }
+    .slide-unit[data-role="front"] { z-index: 2; }
     .slide-image {
       display: block;
       width: 100%;
@@ -2627,9 +2714,6 @@ class ChronoSlideshowCard extends LitElement {
       `;
     }
 
-    const current  = this._currentPhoto;
-    const outgoing = this._transitioning ? this._outgoingPhoto : null;
-
     return html`
       <ha-card>
         <div
@@ -2640,8 +2724,8 @@ class ChronoSlideshowCard extends LitElement {
           ${this._renderZoneGrid('static', itemIndex)}
 
           <div class="slide-stack">
-            ${outgoing ? this._renderSlideUnit(outgoing, itemIndex, fitMode, 'exiting') : ''}
-            ${this._renderSlideUnit(current, itemIndex, fitMode, outgoing ? 'entering' : null)}
+            ${this._renderSlideUnit(this._slotPhotoA, itemIndex, fitMode, this._frontSlotId === 'A' ? 'front' : 'back')}
+            ${this._renderSlideUnit(this._slotPhotoB, itemIndex, fitMode, this._frontSlotId === 'B' ? 'front' : 'back')}
           </div>
 
           ${this._loadError ? html`
