@@ -6,12 +6,28 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.23';
+const CARD_VERSION = '0.0.24';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.24: Cosmetic-only redesign of the Zones configuration panel (no logic
+//          changes — zone_modes/zone_alignment storage, defaults, and
+//          backfill from 0.0.23 are untouched). The 9 independent zone-cells
+//          (each repeating its own "Top · Left"-style header above two
+//          stacked, separately-labeled dropdowns) are replaced with 3 bands
+//          (top/middle/bottom), each a 4-column table: a row-label column
+//          plus left/center/right, with one column-header row ("Left" /
+//          "Center" / "Right") and two field rows ("Transition" /
+//          "Alignment") sharing the same grid-template-columns — guarantees
+//          every column lines up vertically across all three rows
+//          regardless of field content width, rather than relying on manual
+//          width-matching. csSelectField() now skips rendering its <label>
+//          element when given an empty string, instead of leaving a blank
+//          label line — needed since the column/row headers now carry that
+//          meaning instead of a per-field label; harmless to every other
+//          existing call site, none of which pass an empty label.
 // v0.0.23: Two changes. (1) New per-zone setting: zone_alignment, decoupling
 //          how multiple items stacked within a zone align relative to each
 //          other from which screen position the zone itself occupies (e.g.
@@ -838,7 +854,7 @@ function csColorPicker(label, value, onChange) {
 function csSelectField(label, value, options, onChange) {
   return html`
     <div class="text-field">
-      <label>${unsafeHTML(label)}</label>
+      ${label ? html`<label>${unsafeHTML(label)}</label>` : ''}
       <chrono-cs-select
         .value=${value ?? ''}
         .options=${options}
@@ -1499,6 +1515,7 @@ class ChronoSlideshowCardEditor extends LitElement {
   _renderZoneModesPanel() {
     const zoneModes     = this._config?.zone_modes     ?? DEFAULT_ZONE_MODES;
     const zoneAlignment = this._config?.zone_alignment ?? DEFAULT_ZONE_ALIGNMENT;
+    const bands = ['top', 'middle', 'bottom'];
     return html`
       <ha-expansion-panel header="Zones configuration" outlined .expanded=${false}>
         <p class="zone-modes-hint">
@@ -1508,17 +1525,30 @@ class ChronoSlideshowCardEditor extends LitElement {
           screen position the zone itself occupies. All overlay items placed
           in a zone share that zone's settings.
         </p>
-        <div class="zone-modes-grid">
-          ${_GROUP_DEFS.map(g => {
-            const zoneKey = `${g.vertical}-${g.horizontal}`;
-            return html`
-              <div class="zone-mode-cell">
-                ${csSelectField(g.label, zoneModes[zoneKey] ?? 'static', this._zoneModeOptions, e => this._zoneModeChanged(zoneKey, e))}
-                ${csSelectField('Alignment', zoneAlignment[zoneKey] ?? g.horizontal, this._zoneAlignmentOptions, e => this._zoneAlignmentChanged(zoneKey, e))}
+        ${bands.map(band => {
+          const cols = _GROUP_DEFS.filter(g => g.vertical === band); // left, center, right in order
+          return html`
+            <div class="zone-band">
+              <div class="zone-band-header">${band}</div>
+              <div class="zone-band-grid">
+                <div class="zone-band-rowlabel"></div>
+                ${cols.map(g => html`<div class="zone-band-colheader">${g.horizontal[0].toUpperCase()}${g.horizontal.slice(1)}</div>`)}
+
+                <div class="zone-band-rowlabel">Transition</div>
+                ${cols.map(g => {
+                  const zoneKey = `${g.vertical}-${g.horizontal}`;
+                  return csSelectField('', zoneModes[zoneKey] ?? 'static', this._zoneModeOptions, e => this._zoneModeChanged(zoneKey, e));
+                })}
+
+                <div class="zone-band-rowlabel">Alignment</div>
+                ${cols.map(g => {
+                  const zoneKey = `${g.vertical}-${g.horizontal}`;
+                  return csSelectField('', zoneAlignment[zoneKey] ?? g.horizontal, this._zoneAlignmentOptions, e => this._zoneAlignmentChanged(zoneKey, e));
+                })}
               </div>
-            `;
-          })}
-        </div>
+            </div>
+          `;
+        })}
       </ha-expansion-panel>
     `;
   }
@@ -1766,18 +1796,46 @@ class ChronoSlideshowCardEditor extends LitElement {
       margin: 4px 0 12px;
     }
 
-    .zone-modes-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 8px;
+    .zone-band {
+      margin-bottom: 20px;
+    }
+    .zone-band:last-child {
       margin-bottom: 8px;
     }
 
-    .zone-mode-cell {
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
+    .zone-band-header {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--secondary-text-color);
+      border-bottom: 1px solid var(--divider-color, #444);
+      padding-bottom: 4px;
+      margin-bottom: 10px;
+    }
+
+    /* Row-label column sized to fit "Transition"/"Alignment"; the other
+       three columns are the left/center/right zones, equal width. Shared
+       across the column-header row and both field rows below it, so every
+       column lines up vertically regardless of field content. */
+    .zone-band-grid {
+      display: grid;
+      grid-template-columns: auto 1fr 1fr 1fr;
+      column-gap: 8px;
+      row-gap: 6px;
+      align-items: center;
+    }
+
+    .zone-band-rowlabel {
+      font-size: 12px;
+      color: var(--secondary-text-color);
+      white-space: nowrap;
+    }
+
+    .zone-band-colheader {
+      font-size: 12px;
+      color: var(--secondary-text-color);
+      text-align: center;
     }
 
     /* ── Text fields ───────────────────────────────────────────────────────── */
