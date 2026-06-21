@@ -6,12 +6,34 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.22';
+const CARD_VERSION = '0.0.23';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.23: Two changes. (1) New per-zone setting: zone_alignment, decoupling
+//          how multiple items stacked within a zone align relative to each
+//          other from which screen position the zone itself occupies (e.g.
+//          a zone can stay anchored bottom-left while its items are
+//          internally center-aligned relative to one another). Defaults to
+//          matching each zone's own column for full backward compatibility.
+//          Backfilled by migrateConfig the same way zone_modes already is.
+//          .overlay-zone's alignment CSS rules are now keyed by the
+//          configured alignment value (3 selectors) instead of by screen
+//          position (9 selectors) — a real simplification, not just a
+//          rename. "Zone transition behavior" panel renamed "Zones
+//          configuration" (matches "Card configuration"/"Items
+//          configuration") and gained a second Alignment dropdown per zone
+//          alongside the existing mode dropdown. (2) letterbox_color is now
+//          YAML-only, no dedicated UI field (removing the single-field row
+//          it lived in) — same convention as text_shadow_layers — and
+//          defaults to '#000000' instead of '' (which fell back to the
+//          theme's own --card-background-color). Deliberate design
+//          decision, not scope creep: dedicated UI fields are for settings
+//          most people configuring the card will want to touch; rare
+//          tweaks belong in YAML, keeping the UI from sprawling as more
+//          features accumulate.
 // v0.0.22: Fix: mouse-driven swipes didn't work (touch was less affected by
 //          sheer geometry, not because it was actually safe). Two
 //          independent causes, both fixed: (1) the "stop sign" cursor during
@@ -325,6 +347,26 @@ const DEFAULT_ZONE_MODES = {
   'bottom-right': 'dynamic',
 };
 
+// Internal alignment of items stacked within a zone, independent from which
+// screen position (column) the zone itself occupies. Defaults to matching
+// the zone's own column — left zones default to left, etc. — so any config
+// not using this override behaves exactly as before. Letting alignment be
+// overridden per-zone (rather than per-item) matches the underlying CSS
+// mechanism: align-items is a property of the flex container (the zone),
+// not of an individual child — one zone, one internal alignment, shared by
+// everything stacked inside it.
+const DEFAULT_ZONE_ALIGNMENT = {
+  'top-left':      'left',
+  'top-center':    'center',
+  'top-right':     'right',
+  'middle-left':   'left',
+  'middle-center': 'center',
+  'middle-right':  'right',
+  'bottom-left':   'left',
+  'bottom-center': 'center',
+  'bottom-right':  'right',
+};
+
 // Reference card height (px) at which a font_size value renders at its
 // literal em size (scale factor 1). This is the fixed height the HA card
 // editor uses when no real dashboard parent constrains the preview. Any
@@ -372,8 +414,9 @@ const DEFAULT_CONFIG = {
   transition:             'fade',
   transition_duration:    0.6,
   fit_mode:               'contain',
-  letterbox_color:        '',
+  letterbox_color:        '#000000', // YAML-only now, no dedicated UI field — edit manually to change
   zone_modes:             { ...DEFAULT_ZONE_MODES },
+  zone_alignment:         { ...DEFAULT_ZONE_ALIGNMENT },
   items:                  [],
 };
 
@@ -399,11 +442,13 @@ const UI_ITEM_KEYS = new Set([
 
 const UI_CARD_KEYS = new Set([
   'type', 'entity', 'sort_by', 'sort_reverse', 'display_time',
-  'transition', 'transition_duration', 'fit_mode', 'letterbox_color', 'zone_modes',
+  'transition', 'transition_duration', 'fit_mode', 'zone_modes', 'zone_alignment',
   'items',
   // tap is hardcoded to pause/resume now, not part of the generic action
   // system — tap_action is deliberately not in this list, it's never read.
   'hold_action', 'double_tap_action', 'swipe_up_action', 'swipe_down_action',
+  // letterbox_color is deliberately not in this list — YAML-only, no
+  // dedicated UI field, same convention as text_shadow_layers.
 ]);
 
 const VERTICAL_OPTIONS = [
@@ -457,6 +502,12 @@ const ZONE_MODE_OPTIONS = [
   { label: 'Dynamic', value: 'dynamic' },
 ];
 
+const ZONE_ALIGNMENT_OPTIONS = [
+  { label: 'Left',   value: 'left'   },
+  { label: 'Center', value: 'center' },
+  { label: 'Right',  value: 'right'  },
+];
+
 const SHOW_ITEM_POSITION_BADGES = false;
 
 const VERTICAL_BADGE_COLORS = {
@@ -502,9 +553,9 @@ function generateId(existingItems = []) {
 }
 
 // ─── migrateConfig ────────────────────────────────────────────────────────────
-// Backfill a stable _id on any item missing one, and backfill zone_modes with
-// any zone keys missing from an older config. Returns the (possibly new)
-// config and whether anything changed.
+// Backfill a stable _id on any item missing one, and backfill zone_modes /
+// zone_alignment with any zone keys missing from an older config.
+// Returns the (possibly new) config and whether anything changed.
 function migrateConfig(config) {
   let migrated = false;
 
@@ -519,6 +570,13 @@ function migrateConfig(config) {
   const missingZoneKey = Object.keys(DEFAULT_ZONE_MODES).some(k => !(k in zoneModes));
   if (missingZoneKey) {
     config   = { ...config, zone_modes: { ...DEFAULT_ZONE_MODES, ...zoneModes } };
+    migrated = true;
+  }
+
+  const zoneAlignment = config.zone_alignment ?? {};
+  const missingAlignmentKey = Object.keys(DEFAULT_ZONE_ALIGNMENT).some(k => !(k in zoneAlignment));
+  if (missingAlignmentKey) {
+    config   = { ...config, zone_alignment: { ...DEFAULT_ZONE_ALIGNMENT, ...zoneAlignment } };
     migrated = true;
   }
 
@@ -1265,6 +1323,16 @@ class ChronoSlideshowCardEditor extends LitElement {
     this._fireConfig();
   }
 
+  // ── Zone internal alignment (left/center/right) changed ──────────────────
+  _zoneAlignmentChanged(zoneKey, e) {
+    if (!this._config) return;
+    this._clearUndo();
+    const value          = e.target.value ?? e.detail?.value;
+    const zone_alignment = { ...(this._config.zone_alignment ?? DEFAULT_ZONE_ALIGNMENT), [zoneKey]: value };
+    this._config          = { ...this._config, zone_alignment };
+    this._fireConfig();
+  }
+
   // ── Item-level UI field changed ───────────────────────────────────────────
   _itemChanged(index, key, e) {
     if (!this._config) return;
@@ -1425,16 +1493,20 @@ class ChronoSlideshowCardEditor extends LitElement {
   _transitionOptions  = TRANSITION_OPTIONS;
   _fitModeOptions     = FIT_MODE_OPTIONS;
   _zoneModeOptions    = ZONE_MODE_OPTIONS;
+  _zoneAlignmentOptions = ZONE_ALIGNMENT_OPTIONS;
 
-  // ─── Zone modes panel ───────────────────────────────────────────────────────
+  // ─── Zone configuration panel (transition mode + internal alignment) ───────
   _renderZoneModesPanel() {
-    const zoneModes = this._config?.zone_modes ?? DEFAULT_ZONE_MODES;
+    const zoneModes     = this._config?.zone_modes     ?? DEFAULT_ZONE_MODES;
+    const zoneAlignment = this._config?.zone_alignment ?? DEFAULT_ZONE_ALIGNMENT;
     return html`
-      <ha-expansion-panel header="Zone transition behavior" outlined .expanded=${false}>
+      <ha-expansion-panel header="Zones configuration" outlined .expanded=${false}>
         <p class="zone-modes-hint">
           Static zones stay fixed on screen. Dynamic zones transition together
-          with the photo. All overlay items placed in a zone share that zone's
-          setting.
+          with the photo. Alignment controls how multiple items stacked in the
+          same zone align relative to each other — independent from which
+          screen position the zone itself occupies. All overlay items placed
+          in a zone share that zone's settings.
         </p>
         <div class="zone-modes-grid">
           ${_GROUP_DEFS.map(g => {
@@ -1442,6 +1514,7 @@ class ChronoSlideshowCardEditor extends LitElement {
             return html`
               <div class="zone-mode-cell">
                 ${csSelectField(g.label, zoneModes[zoneKey] ?? 'static', this._zoneModeOptions, e => this._zoneModeChanged(zoneKey, e))}
+                ${csSelectField('Alignment', zoneAlignment[zoneKey] ?? g.horizontal, this._zoneAlignmentOptions, e => this._zoneAlignmentChanged(zoneKey, e))}
               </div>
             `;
           })}
@@ -1702,6 +1775,9 @@ class ChronoSlideshowCardEditor extends LitElement {
 
     .zone-mode-cell {
       min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
 
     /* ── Text fields ───────────────────────────────────────────────────────── */
@@ -1945,12 +2021,6 @@ class ChronoSlideshowCardEditor extends LitElement {
         <div class="card-row">
           ${csTextField('Display time (seconds)', c.display_time ?? 8, e => this._numericValueChanged('display_time', e), { type: 'number', step: '1', min: '1' })}
           ${csSelectField('Fit mode', c.fit_mode ?? 'contain', this._fitModeOptions, e => this._valueChanged('fit_mode', e))}
-        </div>
-
-        <!-- Letterbox color: fills any gap left by 'contain' fit mode, also
-             what shows through from the pre-warmed next photo behind it -->
-        <div class="card-row">
-          ${csColorPicker('Letterbox color', c.letterbox_color ?? '', e => this._valueChanged('letterbox_color', e))}
         </div>
 
         <!-- Transition + transition duration -->
@@ -2589,8 +2659,10 @@ class ChronoSlideshowCard extends LitElement {
       (item.vertical   ?? 'middle') === vertical
     );
     if (items.length === 0) return html``;
+    const zoneKey   = `${vertical}-${horizontal}`;
+    const alignment = this._config?.zone_alignment?.[zoneKey] ?? DEFAULT_ZONE_ALIGNMENT[zoneKey] ?? horizontal;
     return html`
-      <div class="overlay-zone overlay-zone-${vertical}-${horizontal}">
+      <div class="overlay-zone overlay-zone-align-${alignment}">
         ${items.map(item => this._renderItem(item, indexOf.get(item)))}
       </div>
     `;
@@ -2828,9 +2900,11 @@ class ChronoSlideshowCard extends LitElement {
       pointer-events: auto;
       padding: calc(8px * var(--scale-factor, 1));
     }
-    .overlay-zone-top-left,    .overlay-zone-middle-left,   .overlay-zone-bottom-left   { align-items: flex-start; text-align: left;   }
-    .overlay-zone-top-center, .overlay-zone-middle-center, .overlay-zone-bottom-center { align-items: center;     text-align: center; }
-    .overlay-zone-top-right,  .overlay-zone-middle-right,  .overlay-zone-bottom-right  { align-items: flex-end;   text-align: right;  }
+    /* Keyed by the zone's configured alignment (zone_alignment), not its
+       screen position — the two are independent since 0.0.23. */
+    .overlay-zone-align-left   { align-items: flex-start; text-align: left;   }
+    .overlay-zone-align-center { align-items: center;     text-align: center; }
+    .overlay-zone-align-right  { align-items: flex-end;   text-align: right;  }
 
     .overlay-template-item {
       color: var(--ha-picture-card-text-color, white);
