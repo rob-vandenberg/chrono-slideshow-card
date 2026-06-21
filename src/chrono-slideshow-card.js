@@ -6,12 +6,32 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.28';
+const CARD_VERSION = '0.0.29';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.29: New: the "Sensor entity" field is now a combobox populated with
+//          actual chrono_folder entities, instead of a free-text field.
+//          chronoFolderEntities(hass) identifies them via hass.entities'
+//          platform metadata (verified live in console before building this
+//          — confirmed hass.entities exists and platform-filtering returns
+//          exactly the expected sensor), not by guessing at attribute shape,
+//          which would be unreliable. Field relabeled "Chrono-folder sensor"
+//          to make the requirement explicit. getStubConfig now receives
+//          hass (a real, documented part of the card API — confirmed
+//          against HA's own frontend source) and defaults a brand-new
+//          card's entity to the first chrono_folder sensor found, or the
+//          literal string "Create a folder watcher first in chrono-folder"
+//          if none exist yet. Considered and rejected reusing the existing
+//          CsSelect combobox unfiltered against the full entity list
+//          (10,000+ entities in a real install — unusable without
+//          virtualization); scoping to chrono_folder's own entities first
+//          sidesteps that entirely. Also: backlog item from 0.0.27 —
+//          csToggleField's withSpacer param renamed to addSpacer (verb-based
+//          name, agreed on at the time, deferred to bundle with other code
+//          changes rather than spend a version on a rename alone).
 // v0.0.28: DIAGNOSTIC, not a confirmed fix: .card-row's align-items changed
 //          from end to center, to test whether the 0.0.27 height-matching
 //          spacer actually equalized .text-field's and .toggle-field's
@@ -610,6 +630,21 @@ function generateId(existingItems = []) {
   return id;
 }
 
+// ─── chronoFolderEntities ───────────────────────────────────────────────────────
+// Entities actually created by the chrono_folder integration, identified via
+// hass.entities' platform metadata (not by guessing at attribute shape).
+// Used both by the editor's sensor-entity combobox and by getStubConfig for a
+// new card's default. Returns { value, label } pairs — value is the raw
+// entity_id (what gets saved), label is the friendly name when available.
+function chronoFolderEntities(hass) {
+  return Object.entries(hass?.entities ?? {})
+    .filter(([, entry]) => entry.platform === 'chrono_folder')
+    .map(([id]) => ({
+      value: id,
+      label: hass?.states?.[id]?.attributes?.friendly_name ?? id,
+    }));
+}
+
 // ─── migrateConfig ────────────────────────────────────────────────────────────
 // Backfill a stable _id on any item missing one, and backfill zone_modes /
 // zone_alignment with any zone keys missing from an older config.
@@ -861,10 +896,10 @@ function csTextField(label, value, onChange, opts = {}) {
   `;
 }
 
-function csToggleField(label, checked, onChange, extraClass = '', withSpacer = false) {
+function csToggleField(label, checked, onChange, extraClass = '', addSpacer = false) {
   return html`
     <div class="toggle-field ${extraClass}">
-      ${withSpacer ? html`<label class="toggle-field-spacer" aria-hidden="true">&nbsp;</label>` : ''}
+      ${addSpacer ? html`<label class="toggle-field-spacer" aria-hidden="true">&nbsp;</label>` : ''}
       <div class="toggle-field-row">
         <label>${unsafeHTML(label)}</label>
         <ha-switch .checked=${checked} @change=${onChange}></ha-switch>
@@ -2127,7 +2162,7 @@ class ChronoSlideshowCardEditor extends LitElement {
 
         <!-- chrono_folder sensor entity -->
         <div class="card-row-1">
-          ${csTextField('Sensor entity (chrono_folder)', c.entity ?? '', e => this._valueChanged('entity', e))}
+          ${csSelectField('Chrono-folder sensor', c.entity ?? '', chronoFolderEntities(this.hass), e => this._valueChanged('entity', e))}
         </div>
 
         <!-- Sort by + reverse -->
@@ -2249,9 +2284,11 @@ class ChronoSlideshowCard extends LitElement {
     return document.createElement('chrono-slideshow-card-editor');
   }
 
-  static getStubConfig() {
+  static getStubConfig(hass) {
+    const found = chronoFolderEntities(hass);
     return {
       ...DEFAULT_CONFIG,
+      entity: found[0]?.value ?? 'Create a folder watcher first in chrono-folder',
       items: [{ template: '{{ fileName }}', vertical: 'bottom', horizontal: 'center', font_color: 'white', font_size: 1.1, font_weight: 600 }],
     };
   }
