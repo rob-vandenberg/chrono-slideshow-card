@@ -6,12 +6,28 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.26';
+const CARD_VERSION = '0.0.27';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.27: Fix: "Reverse order" wasn't aligning with the Sort by dropdown's
+//          value row. Root cause: .toggle-field was a single horizontal
+//          line (label+switch side by side), structurally shorter than
+//          .text-field's label-row-then-control-row shape — no amount of
+//          align-items on the shared .card-row could make a single-line
+//          block's content land in the same vertical band as a two-line
+//          block's second line. Fixed at the structural level, not with a
+//          tuned offset: csToggleField() now optionally renders an
+//          invisible spacer label above its real label+switch row,
+//          guaranteed to match a real label's height because it shares the
+//          exact same CSS rule (.text-field label, .toggle-field-spacer —
+//          one declaration, not duplicated values that could drift).
+//          New optional 5th param withSpacer (default false) — Reverse
+//          order passes true (it must align with Sort by); the standalone
+//          Show state toggle (alone in its own row, nothing to align
+//          against) keeps the default and is visually unaffected.
 // v0.0.26: Fix: 5fr (0.0.25) made the row-label column too wide once
 //          actually seen rendered — user-tested directly in HA and verified
 //          3fr looks right. grid-template-columns: 3fr 4fr 4fr 4fr.
@@ -835,11 +851,14 @@ function csTextField(label, value, onChange, opts = {}) {
   `;
 }
 
-function csToggleField(label, checked, onChange, extraClass = '') {
+function csToggleField(label, checked, onChange, extraClass = '', withSpacer = false) {
   return html`
     <div class="toggle-field ${extraClass}">
-      <label>${unsafeHTML(label)}</label>
-      <ha-switch .checked=${checked} @change=${onChange}></ha-switch>
+      ${withSpacer ? html`<label class="toggle-field-spacer" aria-hidden="true">&nbsp;</label>` : ''}
+      <div class="toggle-field-row">
+        <label>${unsafeHTML(label)}</label>
+        <ha-switch .checked=${checked} @change=${onChange}></ha-switch>
+      </div>
     </div>
   `;
 }
@@ -1866,7 +1885,8 @@ class ChronoSlideshowCardEditor extends LitElement {
       min-width: 0;
     }
 
-    .text-field label {
+    .text-field label,
+    .toggle-field-spacer {
       font-size: 12px;
       font-weight: 600;
       color: var(--secondary-text-color);
@@ -1902,6 +1922,18 @@ class ChronoSlideshowCardEditor extends LitElement {
     /* ── Toggle fields ─────────────────────────────────────────────────────── */
 
     .toggle-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px; /* must match .text-field's gap — this is what makes the
+                   control row below start at the same Y as a paired
+                   .text-field's control row */
+    }
+
+    .toggle-field-spacer {
+      visibility: hidden;
+    }
+
+    .toggle-field-row {
       display: flex;
       flex-direction: row;
       gap: 12px;
@@ -2091,7 +2123,7 @@ class ChronoSlideshowCardEditor extends LitElement {
         <!-- Sort by + reverse -->
         <div class="card-row">
           ${csSelectField('Sort by', c.sort_by ?? 'filename', this._sortByOptions, e => this._valueChanged('sort_by', e))}
-          ${csToggleField('Reverse order', c.sort_reverse ?? false, e => this._toggleChanged('sort_reverse', e))}
+          ${csToggleField('Reverse order', c.sort_reverse ?? false, e => this._toggleChanged('sort_reverse', e), '', true)}
         </div>
 
         <!-- Display time + fit mode -->
