@@ -6,12 +6,25 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.24';
+const CARD_VERSION = '0.0.25';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.25: Cosmetic-only, more compact Zones configuration panel. Band name
+//          (TOP/MIDDLE/BOTTOM) moved onto the same row as the Left/Center/
+//          Right column headers, in the row-label column slot, instead of
+//          its own separate line above — saves a row of vertical space per
+//          band. The divider line moved from a border-bottom on the old
+//          separate header element to a border-top on .zone-band itself, so
+//          it stays in the same visual position despite the header row
+//          merge. grid-template-columns changed from auto 1fr 1fr 1fr to
+//          5fr 4fr 4fr 4fr — auto was sizing the row-label column tight
+//          enough that "BOTTOM" (uppercase + letter-spacing renders wider
+//          than its raw character count) didn't fit comfortably; a fixed
+//          proportion guarantees room regardless of font-rendering
+//          specifics.
 // v0.0.24: Cosmetic-only redesign of the Zones configuration panel (no logic
 //          changes — zone_modes/zone_alignment storage, defaults, and
 //          backfill from 0.0.23 are untouched). The 9 independent zone-cells
@@ -1529,9 +1542,8 @@ class ChronoSlideshowCardEditor extends LitElement {
           const cols = _GROUP_DEFS.filter(g => g.vertical === band); // left, center, right in order
           return html`
             <div class="zone-band">
-              <div class="zone-band-header">${band}</div>
               <div class="zone-band-grid">
-                <div class="zone-band-rowlabel"></div>
+                <div class="zone-band-name">${band}</div>
                 ${cols.map(g => html`<div class="zone-band-colheader">${g.horizontal[0].toUpperCase()}${g.horizontal.slice(1)}</div>`)}
 
                 <div class="zone-band-rowlabel">Transition</div>
@@ -1797,30 +1809,32 @@ class ChronoSlideshowCardEditor extends LitElement {
     }
 
     .zone-band {
+      border-top: 1px solid var(--divider-color, #444);
+      padding-top: 10px;
       margin-bottom: 20px;
     }
     .zone-band:last-child {
       margin-bottom: 8px;
     }
 
-    .zone-band-header {
+    .zone-band-name {
       font-size: 13px;
       font-weight: 700;
       letter-spacing: 0.06em;
       text-transform: uppercase;
       color: var(--secondary-text-color);
-      border-bottom: 1px solid var(--divider-color, #444);
-      padding-bottom: 4px;
-      margin-bottom: 10px;
     }
 
-    /* Row-label column sized to fit "Transition"/"Alignment"; the other
-       three columns are the left/center/right zones, equal width. Shared
-       across the column-header row and both field rows below it, so every
-       column lines up vertically regardless of field content. */
+    /* Row-label column (5fr) carries the band name on the header row and
+       "Transition"/"Alignment" on the field rows below; the three zone
+       columns (4fr each) are equal width. Shared grid-template-columns
+       across all three rows, so every column lines up vertically regardless
+       of field content. 5fr rather than equal/auto sizing because "BOTTOM"
+       rendered uppercase with letter-spacing needs more room than auto
+       content-sizing was giving it. */
     .zone-band-grid {
       display: grid;
-      grid-template-columns: auto 1fr 1fr 1fr;
+      grid-template-columns: 5fr 4fr 4fr 4fr;
       column-gap: 8px;
       row-gap: 6px;
       align-items: center;
