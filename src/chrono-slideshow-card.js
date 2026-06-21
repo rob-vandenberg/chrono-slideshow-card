@@ -6,12 +6,15 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.25';
+const CARD_VERSION = '0.0.26';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v0.0.26: Fix: 5fr (0.0.25) made the row-label column too wide once
+//          actually seen rendered — user-tested directly in HA and verified
+//          3fr looks right. grid-template-columns: 3fr 4fr 4fr 4fr.
 // v0.0.25: Cosmetic-only, more compact Zones configuration panel. Band name
 //          (TOP/MIDDLE/BOTTOM) moved onto the same row as the Left/Center/
 //          Right column headers, in the row-label column slot, instead of
@@ -1825,16 +1828,18 @@ class ChronoSlideshowCardEditor extends LitElement {
       color: var(--secondary-text-color);
     }
 
-    /* Row-label column (5fr) carries the band name on the header row and
+    /* Row-label column (3fr) carries the band name on the header row and
        "Transition"/"Alignment" on the field rows below; the three zone
        columns (4fr each) are equal width. Shared grid-template-columns
        across all three rows, so every column lines up vertically regardless
-       of field content. 5fr rather than equal/auto sizing because "BOTTOM"
-       rendered uppercase with letter-spacing needs more room than auto
-       content-sizing was giving it. */
+       of field content. Fixed proportion rather than equal/auto sizing
+       because auto was sizing the row-label column too tight for "BOTTOM"
+       (uppercase + letter-spacing renders wider than its raw character
+       count). 5fr was tried first and visually confirmed too wide; 3fr is
+       the value actually verified to look right. */
     .zone-band-grid {
       display: grid;
-      grid-template-columns: 5fr 4fr 4fr 4fr;
+      grid-template-columns: 3fr 4fr 4fr 4fr;
       column-gap: 8px;
       row-gap: 6px;
       align-items: center;
