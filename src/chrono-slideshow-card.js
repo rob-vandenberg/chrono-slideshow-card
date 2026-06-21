@@ -6,12 +6,28 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.0.30';
+const CARD_VERSION = '1.0.31';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.0.31: Fix regression from 1.0.30: the original next-photo-bleeds-through
+//          -the-gap bug (0.0.17) was back. Cause: that original fix relied on
+//          the <img> always filling its entire container (width:100%;
+//          height:100%), with any letterboxing happening inside that same
+//          element's own box, covered by its background-color. fit_mode
+//          'intelligent' breaks that assumption whenever its result is
+//          equivalent to plain contain (the no-op or fallback case) — it
+//          gives the <img> an explicit, smaller pixel size instead, so the
+//          gap appears outside the <img>'s own box, in the surrounding
+//          .slide-unit, which had no background of its own — fully
+//          transparent, exposing the back slot's photo underneath. Fixed by
+//          giving .slide-unit itself the same letterbox_color (inline, plus
+//          the same theme-aware static-CSS fallback .slide-image already
+//          has) — invisible whenever the <img> already fully covers
+//          .slide-unit (every other case), only actually matters for the
+//          shrink-and-center case that exposed it.
 // v1.0.30: New fit_mode: 'intelligent' — a bounded blend of zoom and
 //          non-uniform stretch that reduces or eliminates the letterbox gap
 //          plain 'contain' leaves, falling back to plain contain when the
@@ -3022,7 +3038,7 @@ class ChronoSlideshowCard extends LitElement {
       // should rarely if ever be the visible state in practice.
       : { 'object-fit': fitMode === 'intelligent' ? 'contain' : fitMode, 'background-color': letterboxColor };
     return html`
-      <div class="slide-unit" data-role="${role ?? ''}">
+      <div class="slide-unit" data-role="${role ?? ''}" style=${styleMap({ 'background-color': letterboxColor })}>
         <img
           class="slide-image"
           src="${photo.fileURL}"
@@ -3173,6 +3189,7 @@ class ChronoSlideshowCard extends LitElement {
       position: absolute;
       inset: 0;
       will-change: transform, opacity, clip-path;
+      background-color: var(--card-background-color, #1c1c1c);
     }
     .slide-unit[data-role="back"]  { z-index: 1; }
     .slide-unit[data-role="front"] { z-index: 2; }
