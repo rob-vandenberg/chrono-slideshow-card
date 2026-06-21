@@ -6,12 +6,33 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.0.32';
+const CARD_VERSION = '1.0.33';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.0.33: Fix: computeIntelligentFit() could fall back to plain contain
+//          even with an ample zoom/stretch budget (e.g. maxZoom=maxStretch=
+//          1, a combined budget of 4x against a gap that only needed
+//          1.5x) — confirmed against a real user config and real photo/box
+//          dimensions before concluding anything, not just synthetic test
+//          cases. Cause: rounding intermediate values (balanced,
+//          zoomFactor, stretchFactor) to 3 decimal places before
+//          recombining them — rounding a value near 1.2 to the nearest
+//          0.001 and squaring it back together shifts the result by an
+//          amount comparable to that same 0.001 threshold, producing a fake
+//          leftover gap of exactly 0.001 that fails a strict maxGap of 0.
+//          That's a fundamentally different problem than native floating-
+//          point imprecision (which the original 0.1%-rounding design was
+//          actually meant to guard against) — native imprecision is ~15
+//          orders of magnitude smaller than 0.001 and was never the real
+//          risk. Fixed by keeping all arithmetic at full native precision
+//          and rounding only at the two actual decision points (the G<=1
+//          check, and the final residual-gap-vs-maxGap check) rather than
+//          at every intermediate step. Re-verified against all four
+//          original synthetic test cases (0.0.30) to confirm nothing that
+//          was already correct changed.
 // v1.0.32: Fix: with transition:'none' (and forward manual swipes),
 //          fit_mode 'intelligent' visibly flashed the fallback size before
 //          snapping to its computed size, on every single advance — ruled
@@ -752,11 +773,17 @@ function chronoFolderEntities(hass) {
 // picks up exactly the remaining slack — the smallest zoom that still helps,
 // not "max out zoom too."
 //
-// All comparisons are rounded to the nearest 0.1% (3 decimal places as a
-// fraction) before comparing, rather than against raw floating-point
-// results — sub-pixel-level precision on any real screen size, and it
-// avoids exact-equality checks (e.g. against maxGap's default of 0) being
-// thrown off by ordinary floating-point rounding noise.
+// All arithmetic stays at full native precision throughout — only the two
+// actual decision points (the G<=1 check, and the final residual-gap-vs-
+// maxGap check) round to the nearest 0.1% (3 decimal places as a fraction)
+// before comparing. Rounding intermediate values (balanced/zoomFactor/
+// stretchFactor) before recombining them was tried first and was a real
+// bug, not a safety measure: rounding a value near 1.2 to the nearest 0.001
+// and then squaring it shifts the result by an amount comparable to that
+// same 0.001 threshold, which can fail an otherwise-achievable maxGap of 0
+// even with an ample zoom/stretch budget. Native floating-point imprecision
+// itself is roughly 15 orders of magnitude smaller than 0.001 and is fully
+// absorbed by rounding once, at the very end — it was never the actual risk.
 //
 // Returns the photo's target rendered size in pixels — the caller centers
 // it absolutely and relies on the existing overflow:hidden ancestor to clip
@@ -772,15 +799,24 @@ function computeIntelligentFit(naturalWidth, naturalHeight, boxWidth, boxHeight,
 
   const Rp = naturalWidth / naturalHeight;
   const Rb = boxWidth / boxHeight;
-  const G  = round3(Math.max(Rb / Rp, Rp / Rb));
-  if (G <= 1) return fallbackToContain(); // ratios already match, nothing to do
+  // Full native precision from here on — only round() at the two actual
+  // decision points below (the <=1 check and the final residual-gap check).
+  // Rounding intermediate values like balanced/zoomFactor/stretchFactor
+  // before recombining them creates real error sized to collide with the
+  // 0.001 threshold itself (rounding then squaring a value near 1.2 can
+  // shift the result by ~0.001) — a fundamentally different, much larger
+  // problem than native floating-point imprecision, which is ~15 orders of
+  // magnitude smaller than 0.001 and gets fully absorbed by rounding only
+  // once, at the end.
+  const G = Math.max(Rb / Rp, Rp / Rb);
+  if (round3(G) <= 1) return fallbackToContain(); // ratios already match, nothing to do
 
-  const zoomCap    = round3(1 + (maxZoom ?? 0));
-  const stretchCap = round3(1 + (maxStretch ?? 0));
+  const zoomCap    = 1 + (maxZoom ?? 0);
+  const stretchCap = 1 + (maxStretch ?? 0);
   const gapTolerance = maxGap ?? 0;
 
   let zoomFactor, stretchFactor;
-  const balanced = round3(Math.sqrt(G));
+  const balanced = Math.sqrt(G);
   if (balanced <= stretchCap) {
     // True minimum-distortion split fits under both caps — use it.
     zoomFactor    = balanced;
@@ -789,10 +825,10 @@ function computeIntelligentFit(naturalWidth, naturalHeight, boxWidth, boxHeight,
     // Stretch is the tighter, binding cap — max it out, let zoom pick up
     // exactly the remaining slack.
     stretchFactor = stretchCap;
-    zoomFactor    = round3(Math.min(G / stretchFactor, zoomCap));
+    zoomFactor    = Math.min(G / stretchFactor, zoomCap);
   }
 
-  const achieved            = round3(zoomFactor * stretchFactor);
+  const achieved            = zoomFactor * stretchFactor;
   const residualGapFraction = round3(Math.max(0, 1 - achieved / G));
   if (residualGapFraction > gapTolerance) return fallbackToContain();
 
