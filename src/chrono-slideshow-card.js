@@ -6,12 +6,37 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.0.31';
+const CARD_VERSION = '1.0.32';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.0.32: Fix: with transition:'none' (and forward manual swipes),
+//          fit_mode 'intelligent' visibly flashed the fallback size before
+//          snapping to its computed size, on every single advance — ruled
+//          out the transition-animation path entirely by testing with
+//          transition:'none' specifically, which pointed straight at the
+//          real cause. _syncSlotsInstant() (used by 'none' and manual nav)
+//          never flips _frontSlotId — it always overwrites whichever slot
+//          is currently "front" with the new current photo directly,
+//          completely bypassing the pre-warmed back slot that had already
+//          finished loading (and, for 'intelligent', already computed) over
+//          the entire previous display_time. This bug already existed
+//          before 1.0.30 — the existing doc comment on _manualNavigate even
+//          already claimed "forward swipes still benefit from the
+//          pre-warmed back slot," but the code never actually did that —
+//          it just wasn't very noticeable until 'intelligent' made the gap
+//          between the fallback rendering and the final one large enough to
+//          see. New _promoteBackSlotInstant(): flips _frontSlotId to
+//          actually use the slot that's been sitting prepared, instead of
+//          overwriting a visible one with a fresh, not-yet-loaded photo at
+//          the exact moment it's shown. Used for transition:'none' (always
+//          forward, always has a pre-warmed slot) and forward manual swipes.
+//          Backward swipes keep using _syncSlotsInstant() unchanged — no
+//          pre-warmed "prev" slot exists to promote, by design — as does
+//          the one-time initial-load call in _loadFiles(), where no
+//          pre-warmed slot exists yet at all.
 // v1.0.31: Fix regression from 1.0.30: the original next-photo-bleeds-through
 //          -the-gap bug (0.0.17) was back. Cause: that original fix relied on
 //          the <img> always filling its entire container (width:100%;
@@ -2596,15 +2621,36 @@ class ChronoSlideshowCard extends LitElement {
   }
 
   // ── Make the front slot show the current photo and the back slot show the
-  //    next photo, with no animation. Used on initial load, for manual
-  //    navigation (which never animates), and for transition:'none'. Leaves
-  //    _frontSlotId untouched — only the two slots' photo bindings change.
+  //    next photo, with no animation, by directly overwriting whichever slot
+  //    is currently "front" — used only for initial load (no pre-warmed slot
+  //    exists yet to promote) and as the cold-cut fallback for *backward*
+  //    manual navigation (no pre-warmed slot exists for "prev" either, by
+  //    design — only current+next are ever kept warm). Leaves _frontSlotId
+  //    untouched. For any case where a pre-warmed slot genuinely exists to
+  //    use, see _promoteBackSlotInstant() instead.
   _syncSlotsInstant() {
     if (this._frontSlotId === 'A') {
       this._slotPhotoA = this._currentPhoto;
       this._slotPhotoB = this._nextPhoto;
     } else {
       this._slotPhotoB = this._currentPhoto;
+      this._slotPhotoA = this._nextPhoto;
+    }
+  }
+
+  // ── Promote the already pre-warmed back slot to front, instantly, no
+  //    animation — used for transition:'none' and *forward* manual swipes,
+  //    both of which have a real pre-warmed slot to use. Unlike
+  //    _syncSlotsInstant(), this actually flips _frontSlotId to use the slot
+  //    that's been sitting loaded (and, for fit_mode 'intelligent', already
+  //    computed) for the entire previous display_time, instead of
+  //    overwriting whichever slot is currently visible with a brand new,
+  //    not-yet-loaded photo at the exact moment it needs to be shown.
+  _promoteBackSlotInstant() {
+    this._frontSlotId = this._frontSlotId === 'A' ? 'B' : 'A';
+    if (this._frontSlotId === 'A') {
+      this._slotPhotoB = this._nextPhoto;
+    } else {
       this._slotPhotoA = this._nextPhoto;
     }
   }
@@ -2650,7 +2696,7 @@ class ChronoSlideshowCard extends LitElement {
     this._restartTimer();
 
     if (transitionName === 'none') {
-      this._syncSlotsInstant();
+      this._promoteBackSlotInstant();
       this.requestUpdate();
       return;
     }
@@ -2680,9 +2726,9 @@ class ChronoSlideshowCard extends LitElement {
   }
 
   // ── Manual navigation (swipe). Never animates — instant cut, per design:
-  //    transitions are only for autonomous playback. Forward swipes still
-  //    benefit from the pre-warmed back slot; backward swipes are a cold cut
-  //    since only current+next are kept in memory, never prev. ────────────
+  //    transitions are only for autonomous playback. Forward swipes
+  //    genuinely promote the pre-warmed back slot; backward swipes are a
+  //    cold cut since only current+next are kept in memory, never prev. ──
   _manualNavigate(direction) {
     if (this._files.length === 0 || this._transitioning) return;
     const n = this._files.length;
@@ -2692,7 +2738,11 @@ class ChronoSlideshowCard extends LitElement {
     this._setupSubscriptions();
     this._preloadNeighbors();
     this._restartTimer();
-    this._syncSlotsInstant();
+    if (direction > 0) {
+      this._promoteBackSlotInstant();
+    } else {
+      this._syncSlotsInstant();
+    }
     this.requestUpdate();
   }
 
@@ -3119,7 +3169,7 @@ class ChronoSlideshowCard extends LitElement {
       });
       enteringEl.animate(frames, { duration: durationMs, easing: 'linear', fill: 'forwards' });
     }
-    // 'none' is handled in _advance() via _syncSlotsInstant() and never reaches here.
+    // 'none' is handled in _advance() via _promoteBackSlotInstant() and never reaches here.
   }
 
   updated(changedProps) {
