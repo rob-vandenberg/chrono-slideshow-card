@@ -6,12 +6,50 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '0.0.29';
+const CARD_VERSION = '1.0.30';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.0.30: New fit_mode: 'intelligent' — a bounded blend of zoom and
+//          non-uniform stretch that reduces or eliminates the letterbox gap
+//          plain 'contain' leaves, falling back to plain contain when the
+//          configured budget can't close the gap acceptably (e.g. a
+//          portrait photo in a landscape box). Three new YAML-only config
+//          keys (no dedicated UI fields, same convention as
+//          letterbox_color): maxZoom (default 0.12), maxStretch (default
+//          0.08), maxGap (default 0, the largest tolerable leftover gap
+//          fraction before falling back). computeIntelligentFit() is the
+//          core algorithm — minimum-distortion reasoning: for a fixed
+//          required-growth target G, the sum of zoom+stretch (a proxy for
+//          total visual distortion) is minimized when the two are equal
+//          (sqrt(G) each), used whenever that fits under maxStretch (the
+//          tighter cap); otherwise stretch is capped at its max and zoom
+//          picks up exactly the remaining slack, not maxed out
+//          unconditionally. All comparisons round to the nearest 0.1% (3
+//          decimal places as a fraction) first, avoiding floating-point
+//          noise on exact-equality checks like maxGap's default of 0.
+//          Verified against hand-calculated expected values for four cases
+//          (exact match, balanced-split-achievable, both-caps-insufficient,
+//          and extreme-mismatch fallback) before trusting it.
+//          The computation runs once, from the image's own @load event
+//          (_onSlideImageLoad), not at transition time — per the existing
+//          persistent front/back slot architecture, the slot is normally
+//          still hidden with the entire display_time window ahead of it
+//          when this fires, so by the time it's promoted to front there is
+//          no calculation left to do. Result is stored per slot
+//          (_slotIntelligentSizeA/B, new reactive state) since role swaps
+//          every transition but slot identity doesn't. Implementation note:
+//          this can't be done as transform + object-fit:cover on the same
+//          element — object-fit's crop calculation uses the element's own
+//          layout-box size, computed before any transform is applied, so a
+//          transform never feeds into it. Instead, _renderSlideUnit() sets
+//          the precomputed renderWidth/renderHeight as explicit pixel
+//          dimensions (a real layout property), absolutely centered via
+//          translate(-50%,-50%), with the existing overflow:hidden ancestor
+//          clipping anything that doesn't fit — no new CSS containment
+//          needed, reuses what's already there.
 // v0.0.29: New: the "Sensor entity" field is now a combobox populated with
 //          actual chrono_folder entities, instead of a free-text field.
 //          chronoFolderEntities(hass) identifies them via hass.entities'
@@ -493,6 +531,14 @@ const DEFAULT_CONFIG = {
   transition_duration:    0.6,
   fit_mode:               'contain',
   letterbox_color:        '#000000', // YAML-only now, no dedicated UI field — edit manually to change
+  // The three below are also YAML-only, no dedicated UI fields, only used
+  // when fit_mode is 'intelligent'. maxZoom/maxStretch as fractions (0.12 =
+  // 12%); maxGap is the largest acceptable leftover letterbox fraction
+  // after using the full zoom+stretch budget (0 = none tolerated, fall
+  // back to plain 'contain' rather than leave any visible bar).
+  maxZoom:                0.12,
+  maxStretch:             0.08,
+  maxGap:                 0,
   zone_modes:             { ...DEFAULT_ZONE_MODES },
   zone_alignment:         { ...DEFAULT_ZONE_ALIGNMENT },
   items:                  [],
@@ -527,6 +573,7 @@ const UI_CARD_KEYS = new Set([
   'hold_action', 'double_tap_action', 'swipe_up_action', 'swipe_down_action',
   // letterbox_color is deliberately not in this list — YAML-only, no
   // dedicated UI field, same convention as text_shadow_layers.
+  // maxZoom/maxStretch/maxGap are the same — YAML-only, no UI field.
 ]);
 
 const VERTICAL_OPTIONS = [
@@ -570,9 +617,10 @@ function pickRandomTransition() {
 }
 
 const FIT_MODE_OPTIONS = [
-  { label: 'Cover',   value: 'cover'   },
-  { label: 'Contain', value: 'contain' },
-  { label: 'Fill',    value: 'fill'    },
+  { label: 'Cover',       value: 'cover'       },
+  { label: 'Contain',     value: 'contain'     },
+  { label: 'Fill',        value: 'fill'        },
+  { label: 'Intelligent', value: 'intelligent' },
 ];
 
 const ZONE_MODE_OPTIONS = [
@@ -643,6 +691,79 @@ function chronoFolderEntities(hass) {
       value: id,
       label: hass?.states?.[id]?.attributes?.friendly_name ?? id,
     }));
+}
+
+// ─── computeIntelligentFit ──────────────────────────────────────────────────────
+// fit_mode 'intelligent': a bounded blend of uniform zoom and non-uniform
+// stretch to reduce or eliminate the letterbox gap plain 'contain' would
+// leave, falling back to plain contain's own sizing when the configured
+// budget (maxZoom/maxStretch/maxGap, all fractions, e.g. 0.12 = 12%) isn't
+// enough to close the gap acceptably — a portrait photo in a landscape box
+// has no good answer other than contain, and this falls back to exactly
+// that rather than forcing a result that looks wrong.
+//
+// Minimum-distortion reasoning: closing the full gap requires
+// zoomFactor × stretchFactor = G, where G (≥1) is the photo/box aspect-ratio
+// mismatch. For a fixed product, the sum (a proxy for total distortion) is
+// minimized when the two factors are equal — zoomFactor = stretchFactor =
+// sqrt(G) — so that's used whenever it fits under maxStretch (the tighter of
+// the two caps). When it doesn't, stretch is capped at its max and zoom
+// picks up exactly the remaining slack — the smallest zoom that still helps,
+// not "max out zoom too."
+//
+// All comparisons are rounded to the nearest 0.1% (3 decimal places as a
+// fraction) before comparing, rather than against raw floating-point
+// results — sub-pixel-level precision on any real screen size, and it
+// avoids exact-equality checks (e.g. against maxGap's default of 0) being
+// thrown off by ordinary floating-point rounding noise.
+//
+// Returns the photo's target rendered size in pixels — the caller centers
+// it absolutely and relies on the existing overflow:hidden ancestor to clip
+// anything that doesn't fit, exactly like a zoomed plain 'cover' would.
+function computeIntelligentFit(naturalWidth, naturalHeight, boxWidth, boxHeight, maxZoom, maxStretch, maxGap) {
+  const round3 = v => Math.round(v * 1000) / 1000;
+  const fallbackToContain = () => {
+    const s = Math.min(boxWidth / naturalWidth, boxHeight / naturalHeight);
+    return { renderWidth: naturalWidth * s, renderHeight: naturalHeight * s };
+  };
+
+  if (!naturalWidth || !naturalHeight || !boxWidth || !boxHeight) return fallbackToContain();
+
+  const Rp = naturalWidth / naturalHeight;
+  const Rb = boxWidth / boxHeight;
+  const G  = round3(Math.max(Rb / Rp, Rp / Rb));
+  if (G <= 1) return fallbackToContain(); // ratios already match, nothing to do
+
+  const zoomCap    = round3(1 + (maxZoom ?? 0));
+  const stretchCap = round3(1 + (maxStretch ?? 0));
+  const gapTolerance = maxGap ?? 0;
+
+  let zoomFactor, stretchFactor;
+  const balanced = round3(Math.sqrt(G));
+  if (balanced <= stretchCap) {
+    // True minimum-distortion split fits under both caps — use it.
+    zoomFactor    = balanced;
+    stretchFactor = balanced;
+  } else {
+    // Stretch is the tighter, binding cap — max it out, let zoom pick up
+    // exactly the remaining slack.
+    stretchFactor = stretchCap;
+    zoomFactor    = round3(Math.min(G / stretchFactor, zoomCap));
+  }
+
+  const achieved            = round3(zoomFactor * stretchFactor);
+  const residualGapFraction = round3(Math.max(0, 1 - achieved / G));
+  if (residualGapFraction > gapTolerance) return fallbackToContain();
+
+  const baseScale = Math.min(boxWidth / naturalWidth, boxHeight / naturalHeight);
+  let renderWidth  = naturalWidth  * baseScale * zoomFactor;
+  let renderHeight = naturalHeight * baseScale * zoomFactor;
+  if (Rp < Rb) {
+    renderWidth *= stretchFactor;  // width was the short axis under contain
+  } else if (Rp > Rb) {
+    renderHeight *= stretchFactor; // height was the short axis under contain
+  }
+  return { renderWidth, renderHeight };
 }
 
 // ─── migrateConfig ────────────────────────────────────────────────────────────
@@ -2274,6 +2395,8 @@ class ChronoSlideshowCard extends LitElement {
     _frontSlotId:   { state: true },
     _slotPhotoA:    { state: true },
     _slotPhotoB:    { state: true },
+    _slotIntelligentSizeA: { state: true },
+    _slotIntelligentSizeB: { state: true },
   };
 
   static getCardSize() {
@@ -2317,6 +2440,8 @@ class ChronoSlideshowCard extends LitElement {
     this._frontSlotId         = 'A';   // which persistent slot ('A' or 'B') is currently visible/front
     this._slotPhotoA          = null;  // photo currently bound to persistent slot A
     this._slotPhotoB          = null;  // photo currently bound to persistent slot B
+    this._slotIntelligentSizeA = null; // precomputed {renderWidth, renderHeight} for fit_mode 'intelligent', slot A
+    this._slotIntelligentSizeB = null; // same, slot B
     this._transitionTimeoutId   = null;
     this._animationStartedFor   = null;
     this._resolvedTransitionName = 'fade'; // settles a 'random' pick once per advance, shared with _runTransitionAnimations
@@ -2845,6 +2970,28 @@ class ChronoSlideshowCard extends LitElement {
     this.requestUpdate();
   }
 
+  // ── fit_mode 'intelligent': precompute the bounded zoom+stretch sizing the
+  //    moment the image finishes loading, not at transition time. Per the
+  //    persistent front/back slot architecture, this slot is normally still
+  //    hidden ("back") with the entire display_time window ahead of it when
+  //    this fires — by the time it's actually promoted to "front", the
+  //    computation (and the resulting style) is already long settled, no
+  //    work left to do at the moment that matters.
+  _onSlideImageLoad(e, fitMode, slotId) {
+    if (fitMode !== 'intelligent') return;
+    const img = e.target;
+    const rect = this.getBoundingClientRect();
+    if (!rect.width || !rect.height || !img.naturalWidth || !img.naturalHeight) return;
+    const cfg = this._config ?? {};
+    const result = computeIntelligentFit(
+      img.naturalWidth, img.naturalHeight,
+      rect.width, rect.height,
+      cfg.maxZoom ?? 0.12, cfg.maxStretch ?? 0.08, cfg.maxGap ?? 0
+    );
+    if (slotId === 'A') this._slotIntelligentSizeA = result;
+    else                 this._slotIntelligentSizeB = result;
+  }
+
   // ── Render one of the two persistent slide units: image + dynamic-zone
   //    overlays, the part that participates in the photo transition. `role`
   //    is always 'front' (visible, top) or 'back' (hidden behind, pre-warmed
@@ -2852,9 +2999,28 @@ class ChronoSlideshowCard extends LitElement {
   //    created/destroyed per transition, so nothing is ever animating a
   //    freshly-inserted, unpainted element. The actual animation is driven by
   //    _runTransitionAnimations() via the Web Animations API — see updated().
-  _renderSlideUnit(photo, indexOf, fitMode, role) {
+  //    `slotId` ('A'/'B') identifies which persistent slot this is, so the
+  //    fit_mode 'intelligent' precomputed size (and the @load handler that
+  //    computes it) are tracked per slot, not per role — role swaps every
+  //    transition, the slot's own identity and photo do not.
+  _renderSlideUnit(photo, indexOf, fitMode, role, slotId) {
     if (!photo) return html``;
-    const imgStyles = { 'object-fit': fitMode, 'background-color': this._config?.letterbox_color || undefined };
+    const letterboxColor = this._config?.letterbox_color || undefined;
+    const intelligentSize = slotId === 'A' ? this._slotIntelligentSizeA : this._slotIntelligentSizeB;
+    const imgStyles = (fitMode === 'intelligent' && intelligentSize)
+      ? {
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          width: `${intelligentSize.renderWidth}px`,
+          height: `${intelligentSize.renderHeight}px`,
+          transform: 'translate(-50%, -50%)',
+          'background-color': letterboxColor,
+        }
+      // Plain 'contain' until the precomputed size exists (e.g. the instant
+      // before @load has fired) — given the precompute-on-load timing, this
+      // should rarely if ever be the visible state in practice.
+      : { 'object-fit': fitMode === 'intelligent' ? 'contain' : fitMode, 'background-color': letterboxColor };
     return html`
       <div class="slide-unit" data-role="${role ?? ''}">
         <img
@@ -2862,6 +3028,7 @@ class ChronoSlideshowCard extends LitElement {
           src="${photo.fileURL}"
           style=${styleMap(imgStyles)}
           draggable="false"
+          @load=${(e) => this._onSlideImageLoad(e, fitMode, slotId)}
           @error=${() => this._onImageError(photo)}
         >
         ${this._renderZoneGrid('dynamic', indexOf)}
@@ -3179,8 +3346,8 @@ class ChronoSlideshowCard extends LitElement {
           ${this._renderZoneGrid('static', itemIndex)}
 
           <div class="slide-stack">
-            ${this._renderSlideUnit(this._slotPhotoA, itemIndex, fitMode, this._frontSlotId === 'A' ? 'front' : 'back')}
-            ${this._renderSlideUnit(this._slotPhotoB, itemIndex, fitMode, this._frontSlotId === 'B' ? 'front' : 'back')}
+            ${this._renderSlideUnit(this._slotPhotoA, itemIndex, fitMode, this._frontSlotId === 'A' ? 'front' : 'back', 'A')}
+            ${this._renderSlideUnit(this._slotPhotoB, itemIndex, fitMode, this._frontSlotId === 'B' ? 'front' : 'back', 'B')}
           </div>
 
           ${this._paused ? html`
