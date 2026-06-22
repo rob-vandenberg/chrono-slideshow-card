@@ -6,12 +6,35 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.0.33';
+const CARD_VERSION = '1.0.34';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.0.34: Fix (treat as a test, not assumed-complete): after several manual
+//          swipes (especially with fade), a photo could appear to repeat
+//          later, at the next real transition. Debug logging (1.0.33.1)
+//          confirmed _currentIndex/_frontSlotId/both slots' photo
+//          assignments are correct at every single traced step — this is
+//          not a data bug. User pointed out the actual likely cause:
+//          before 1.0.32, swipes never promoted a slot that had ever been
+//          really animated; now they do, via _promoteBackSlotInstant(). A
+//          slot last animated as "exiting" (e.g. faded to opacity 0,
+//          fill:'forwards', never cancelled since nothing animated it
+//          again) can be promoted straight to front by an instant cut and
+//          stay invisible — logically front, but stuck on stale animation
+//          state — until the next real animated transition's own existing
+//          cleanup (1.0.21) finally cancels it, by which point the data has
+//          already moved on, looking exactly like an old photo reappearing.
+//          New _clearStaleAnimationState(): the same cancel-and-reset
+//          cleanup _runTransitionAnimations() already does for its own
+//          elements, now also called from _promoteBackSlotInstant() AND
+//          _syncSlotsInstant() — covers forward swipes, transition:'none',
+//          backward swipes, and initial load uniformly, rather than only
+//          the specific path that exposed the bug. Built from 1.0.33, not
+//          the 1.0.33.1 debug build — the temporary console logging does
+//          not carry forward into this version.
 // v1.0.33: Fix: computeIntelligentFit() could fall back to plain contain
 //          even with an ample zoom/stretch budget (e.g. maxZoom=maxStretch=
 //          1, a combined budget of 4x against a gap that only needed
@@ -2656,6 +2679,25 @@ class ChronoSlideshowCard extends LitElement {
     }
   }
 
+  // ── Cancels any lingering WAAPI animations on both persistent slide-units,
+  //    and resets the clock transition's directly-set mask — the same
+  //    cleanup _runTransitionAnimations() already does for its own elements
+  //    at the start of every real animated transition. Needed here too: a
+  //    slot last animated as "exiting" (e.g. faded to opacity 0,
+  //    fill:'forwards', never cancelled because nothing animated it again
+  //    since) can be promoted straight to "front" by an instant cut and
+  //    stay invisible, stuck on that stale state, even though it's now
+  //    logically front — exactly what an instant cut (no animation at all)
+  //    must not allow to happen.
+  _clearStaleAnimationState() {
+    const stack = this.shadowRoot?.querySelector('.slide-stack');
+    if (!stack) return;
+    stack.querySelectorAll('.slide-unit').forEach(unit => {
+      unit.getAnimations().forEach(a => a.cancel());
+      unit.style.maskImage = unit.style.webkitMaskImage = '';
+    });
+  }
+
   // ── Make the front slot show the current photo and the back slot show the
   //    next photo, with no animation, by directly overwriting whichever slot
   //    is currently "front" — used only for initial load (no pre-warmed slot
@@ -2665,6 +2707,7 @@ class ChronoSlideshowCard extends LitElement {
   //    untouched. For any case where a pre-warmed slot genuinely exists to
   //    use, see _promoteBackSlotInstant() instead.
   _syncSlotsInstant() {
+    this._clearStaleAnimationState();
     if (this._frontSlotId === 'A') {
       this._slotPhotoA = this._currentPhoto;
       this._slotPhotoB = this._nextPhoto;
@@ -2683,6 +2726,7 @@ class ChronoSlideshowCard extends LitElement {
   //    overwriting whichever slot is currently visible with a brand new,
   //    not-yet-loaded photo at the exact moment it needs to be shown.
   _promoteBackSlotInstant() {
+    this._clearStaleAnimationState();
     this._frontSlotId = this._frontSlotId === 'A' ? 'B' : 'A';
     if (this._frontSlotId === 'A') {
       this._slotPhotoB = this._nextPhoto;
