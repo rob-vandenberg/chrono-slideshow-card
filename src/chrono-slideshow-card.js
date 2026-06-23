@@ -6,12 +6,26 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.0.34';
+const CARD_VERSION = '1.0.35';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.0.35: New fit_mode 'intelligent' setting zoomCenter — configurable
+//          vertical crop anchor (default 33, was a fixed 50/centered) so a
+//          subject in the upper portion of a photo (most portraits, pets)
+//          stays better framed after zoom-driven cropping; horizontal stays
+//          centered always, no horizontal counterpart by design. Also:
+//          maxZoom/maxStretch/maxGap are now written in YAML as plain
+//          percentage numbers (e.g. 40 = 40%) instead of raw 0-1 fractions,
+//          converted to a fraction only at the one call site that consumes
+//          them — the user-facing value should never be shaped to suit the
+//          implementation. New defaults: maxZoom 40 (was 0.12), maxStretch
+//          20 (was 0.08), maxGap unchanged at 0. Fix: the maxZoom/maxStretch/
+//          maxGap fallback values were hardcoded literals duplicating
+//          DEFAULT_CONFIG instead of referencing it — the two could have
+//          silently drifted apart; now there is exactly one source of truth.
 // v1.0.34: Fix (treat as a test, not assumed-complete): after several manual
 //          swipes (especially with fade), a photo could appear to repeat
 //          later, at the next real transition. Debug logging (1.0.33.1)
@@ -616,14 +630,23 @@ const DEFAULT_CONFIG = {
   transition_duration:    0.6,
   fit_mode:               'contain',
   letterbox_color:        '#000000', // YAML-only now, no dedicated UI field — edit manually to change
-  // The three below are also YAML-only, no dedicated UI fields, only used
-  // when fit_mode is 'intelligent'. maxZoom/maxStretch as fractions (0.12 =
-  // 12%); maxGap is the largest acceptable leftover letterbox fraction
-  // after using the full zoom+stretch budget (0 = none tolerated, fall
-  // back to plain 'contain' rather than leave any visible bar).
-  maxZoom:                0.12,
-  maxStretch:             0.08,
+  // The four below are also YAML-only, no dedicated UI fields, only used
+  // when fit_mode is 'intelligent'. maxZoom/maxStretch/maxGap/zoomCenter are
+  // all written in YAML as plain percentage numbers (40 = 40%), never as
+  // raw 0-1 fractions — converted to a fraction only at the point each is
+  // actually consumed, never stored or compared as a fraction here. maxGap
+  // is the largest acceptable leftover letterbox percentage after using the
+  // full zoom+stretch budget (0 = none tolerated, fall back to plain
+  // 'contain' rather than leave any visible bar). zoomCenter is the
+  // vertical anchor point used when redistributing the crop a zoom creates
+  // — 50 = centered (old behavior), lower values keep more of the photo's
+  // top in frame at the cost of its bottom (e.g. 33 favors a subject in the
+  // upper third, as portraits and pet photos usually have). Horizontal
+  // stays centered always; this is a vertical-only bias.
+  maxZoom:                40,
+  maxStretch:             20,
   maxGap:                 0,
+  zoomCenter:             33,
   zone_modes:             { ...DEFAULT_ZONE_MODES },
   zone_alignment:         { ...DEFAULT_ZONE_ALIGNMENT },
   items:                  [],
@@ -658,7 +681,7 @@ const UI_CARD_KEYS = new Set([
   'hold_action', 'double_tap_action', 'swipe_up_action', 'swipe_down_action',
   // letterbox_color is deliberately not in this list — YAML-only, no
   // dedicated UI field, same convention as text_shadow_layers.
-  // maxZoom/maxStretch/maxGap are the same — YAML-only, no UI field.
+  // maxZoom/maxStretch/maxGap/zoomCenter are the same — YAML-only, no UI field.
 ]);
 
 const VERTICAL_OPTIONS = [
@@ -782,10 +805,15 @@ function chronoFolderEntities(hass) {
 // fit_mode 'intelligent': a bounded blend of uniform zoom and non-uniform
 // stretch to reduce or eliminate the letterbox gap plain 'contain' would
 // leave, falling back to plain contain's own sizing when the configured
-// budget (maxZoom/maxStretch/maxGap, all fractions, e.g. 0.12 = 12%) isn't
-// enough to close the gap acceptably — a portrait photo in a landscape box
-// has no good answer other than contain, and this falls back to exactly
-// that rather than forcing a result that looks wrong.
+// budget isn't enough to close the gap acceptably — a portrait photo in a
+// landscape box has no good answer other than contain, and this falls back
+// to exactly that rather than forcing a result that looks wrong.
+//
+// maxZoom/maxStretch/maxGap are this function's own parameters and stay
+// fractions here (0.12 = 12%), unchanged by the YAML-facing convention —
+// in YAML these are written as plain percentage numbers (e.g. 40 = 40%)
+// and converted to a fraction once, only at the call site in
+// _onSlideImageLoad(), never inside this function.
 //
 // Minimum-distortion reasoning: closing the full gap requires
 // zoomFactor × stretchFactor = G, where G (≥1) is the photo/box aspect-ratio
@@ -808,9 +836,11 @@ function chronoFolderEntities(hass) {
 // itself is roughly 15 orders of magnitude smaller than 0.001 and is fully
 // absorbed by rounding once, at the very end — it was never the actual risk.
 //
-// Returns the photo's target rendered size in pixels — the caller centers
-// it absolutely and relies on the existing overflow:hidden ancestor to clip
-// anything that doesn't fit, exactly like a zoomed plain 'cover' would.
+// Returns the photo's target rendered size in pixels only — not position.
+// The caller positions it absolutely using the configurable zoomCenter
+// vertical anchor (50 = centered; see DEFAULT_CONFIG), and relies on the
+// existing overflow:hidden ancestor to clip anything that doesn't fit,
+// exactly like a zoomed plain 'cover' would.
 function computeIntelligentFit(naturalWidth, naturalHeight, boxWidth, boxHeight, maxZoom, maxStretch, maxGap) {
   const round3 = v => Math.round(v * 1000) / 1000;
   const fallbackToContain = () => {
@@ -3132,7 +3162,9 @@ class ChronoSlideshowCard extends LitElement {
     const result = computeIntelligentFit(
       img.naturalWidth, img.naturalHeight,
       rect.width, rect.height,
-      cfg.maxZoom ?? 0.12, cfg.maxStretch ?? 0.08, cfg.maxGap ?? 0
+      (cfg.maxZoom    ?? DEFAULT_CONFIG.maxZoom)    / 100,
+      (cfg.maxStretch ?? DEFAULT_CONFIG.maxStretch) / 100,
+      (cfg.maxGap     ?? DEFAULT_CONFIG.maxGap)     / 100
     );
     if (slotId === 'A') this._slotIntelligentSizeA = result;
     else                 this._slotIntelligentSizeB = result;
@@ -3153,14 +3185,18 @@ class ChronoSlideshowCard extends LitElement {
     if (!photo) return html``;
     const letterboxColor = this._config?.letterbox_color || undefined;
     const intelligentSize = slotId === 'A' ? this._slotIntelligentSizeA : this._slotIntelligentSizeB;
+    // zoomCenter: vertical-only crop anchor (50 = centered, the old fixed
+    // behavior). Horizontal is intentionally always '50%' below — there is
+    // no horizontal counterpart, by design (see DEFAULT_CONFIG comment).
+    const zoomCenterPct = this._config?.zoomCenter ?? DEFAULT_CONFIG.zoomCenter;
     const imgStyles = (fitMode === 'intelligent' && intelligentSize)
       ? {
           position: 'absolute',
-          top: '50%',
+          top: `${zoomCenterPct}%`,
           left: '50%',
           width: `${intelligentSize.renderWidth}px`,
           height: `${intelligentSize.renderHeight}px`,
-          transform: 'translate(-50%, -50%)',
+          transform: `translate(-50%, -${zoomCenterPct}%)`,
           'background-color': letterboxColor,
         }
       // Plain 'contain' until the precomputed size exists (e.g. the instant
