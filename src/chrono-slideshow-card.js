@@ -6,12 +6,24 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.0.35';
+const CARD_VERSION = '1.1.36';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.36: New ambient dimmer feature: a full-coverage overlay whose opacity
+//          is derived from a configurable lux sensor entity, compensating for
+//          tablet brightness hardware limits. Opacity follows a Stevens
+//          power-law perceptual curve (exponent 0.33 × dimmer_aggressiveness,
+//          matching how the human eye perceives brightness) mapping a
+//          configurable lux range to a configurable opacity range. All opacity
+//          values use the percentage-number convention (0-100). UI fields:
+//          dimmer_enabled (toggle), dimmer_entity (HA entity picker),
+//          dimmer_lux_min/max, dimmer_min/max_opacity. YAML-only:
+//          dimmer_color (default #000000), dimmer_aggressiveness (default 1).
+//          Overlay sits above all content including text overlays and the
+//          pause indicator (z-index 5). pointer-events: none throughout.
 // v1.0.35: New fit_mode 'intelligent' setting zoomCenter — configurable
 //          vertical crop anchor (default 33, was a fixed 50/centered) so a
 //          subject in the upper portion of a photo (most portraits, pets)
@@ -647,6 +659,20 @@ const DEFAULT_CONFIG = {
   maxStretch:             20,
   maxGap:                 0,
   zoomCenter:             33,
+  // Dimmer: a full-coverage overlay whose opacity is derived from an ambient
+  // lux sensor, compensating for tablet brightness limits. dimmer_color and
+  // dimmer_aggressiveness are YAML-only. All opacity values are plain
+  // percentage numbers (0–100). dimmer_aggressiveness controls the Stevens
+  // power-law exponent (1 = pure human-eye perceptual curve, cube-root;
+  // higher = more aggressive, lower = flatter).
+  dimmer_enabled:         false,
+  dimmer_entity:          '',
+  dimmer_lux_min:         0,
+  dimmer_lux_max:         40,
+  dimmer_min_opacity:     0,
+  dimmer_max_opacity:     80,
+  dimmer_color:           '#000000',
+  dimmer_aggressiveness:  1,
   zone_modes:             { ...DEFAULT_ZONE_MODES },
   zone_alignment:         { ...DEFAULT_ZONE_ALIGNMENT },
   items:                  [],
@@ -682,6 +708,9 @@ const UI_CARD_KEYS = new Set([
   // letterbox_color is deliberately not in this list — YAML-only, no
   // dedicated UI field, same convention as text_shadow_layers.
   // maxZoom/maxStretch/maxGap/zoomCenter are the same — YAML-only, no UI field.
+  // dimmer_color and dimmer_aggressiveness are YAML-only; the rest have UI fields.
+  'dimmer_enabled', 'dimmer_entity', 'dimmer_lux_min', 'dimmer_lux_max',
+  'dimmer_min_opacity', 'dimmer_max_opacity',
 ]);
 
 const VERTICAL_OPTIONS = [
@@ -2434,6 +2463,30 @@ class ChronoSlideshowCardEditor extends LitElement {
           ${csTextField('Transition duration (s)', c.transition_duration ?? 0.6, e => this._numericValueChanged('transition_duration', e), { type: 'number', step: '0.1', min: '0' })}
         </div>
 
+        <!-- Dimmer -->
+        <div class="card-row">
+          ${csToggleField('Ambient dimmer', c.dimmer_enabled ?? false, e => this._toggleChanged('dimmer_enabled', e), '', true)}
+        </div>
+        ${c.dimmer_enabled ? html`
+        <div class="card-row-1">
+          <ha-entity-picker
+            label="Ambient lux sensor"
+            .hass=${this.hass}
+            .value=${c.dimmer_entity ?? ''}
+            allow-custom-entity
+            @value-changed=${e => this._valueChanged('dimmer_entity', e)}
+          ></ha-entity-picker>
+        </div>
+        <div class="card-row">
+          ${csTextField('Lux min', c.dimmer_lux_min ?? 0, e => this._numericValueChanged('dimmer_lux_min', e), { type: 'number', step: '1', min: '0' })}
+          ${csTextField('Lux max', c.dimmer_lux_max ?? 40, e => this._numericValueChanged('dimmer_lux_max', e), { type: 'number', step: '1', min: '0' })}
+        </div>
+        <div class="card-row">
+          ${csTextField('Max opacity (%)', c.dimmer_max_opacity ?? 80, e => this._numericValueChanged('dimmer_max_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
+          ${csTextField('Min opacity (%)', c.dimmer_min_opacity ?? 0, e => this._numericValueChanged('dimmer_min_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
+        </div>
+        ` : ''}
+
       </ha-expansion-panel>
 
       <!-- ── Zone modes panel ────────────────────────────────────────────────── -->
@@ -3336,6 +3389,14 @@ class ChronoSlideshowCard extends LitElement {
       color: white;
     }
 
+    /* ── Dimmer overlay: sits above photo, overlays, and pause indicator ─────── */
+    .dimmer-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      pointer-events: none;
+    }
+
     /* ── Static overlay layer: outside the transitioning subtree ────────────── */
     .overlay-grid-static {
       position: absolute;
@@ -3475,6 +3536,36 @@ class ChronoSlideshowCard extends LitElement {
     }
   `;
 
+  // ── Dimmer ────────────────────────────────────────────────────────────────
+  // Returns the overlay opacity as a 0–1 fraction. Uses a Stevens power-law
+  // curve (exponent 0.33 = human brightness perception baseline, cube-root)
+  // scaled by dimmer_aggressiveness. The curve maps lux onto the configured
+  // min–max opacity range, with lux clamped to [lux_min, lux_max]:
+  //   t = (lux - lux_min) / (lux_max - lux_min)   — normalized 0–1
+  //   opacity = max + (min - max) × t^(0.33 × aggressiveness)
+  // At t=0 (dark) opacity = max; at t=1 (bright) opacity = min.
+  // The perceptual curve means most of the opacity change happens at the low
+  // end of the lux range, matching how the human eye actually perceives dim
+  // environments as much darker than a linear scale would suggest.
+  _computeDimmerOpacity() {
+    const c = this._config;
+    const entity = c.dimmer_entity ?? '';
+    if (!entity) return 0;
+    const stateObj = this._hass?.states?.[entity];
+    const lux = stateObj ? parseFloat(stateObj.state) : 0;
+    if (isNaN(lux)) return 0;
+
+    const luxMin  = c.dimmer_lux_min  ?? DEFAULT_CONFIG.dimmer_lux_min;
+    const luxMax  = c.dimmer_lux_max  ?? DEFAULT_CONFIG.dimmer_lux_max;
+    const opMin   = (c.dimmer_min_opacity ?? DEFAULT_CONFIG.dimmer_min_opacity) / 100;
+    const opMax   = (c.dimmer_max_opacity ?? DEFAULT_CONFIG.dimmer_max_opacity) / 100;
+    const aggr    = c.dimmer_aggressiveness ?? DEFAULT_CONFIG.dimmer_aggressiveness;
+
+    if (luxMax <= luxMin) return opMax; // degenerate config — always max opacity
+    const t = Math.max(0, Math.min(1, (lux - luxMin) / (luxMax - luxMin)));
+    return opMax + (opMin - opMax) * Math.pow(t, 0.33 * aggr);
+  }
+
   render() {
     if (!this._config || !this._hass) return html``;
 
@@ -3546,6 +3637,13 @@ class ChronoSlideshowCard extends LitElement {
                 <div>Failed to load: ${this._loadError}</div>
               </div>
             </div>
+          ` : ''}
+
+          ${(this._config.dimmer_enabled && this._config.dimmer_entity) ? html`
+            <div class="dimmer-overlay" style="
+              background-color: ${this._config.dimmer_color ?? DEFAULT_CONFIG.dimmer_color};
+              opacity: ${this._computeDimmerOpacity()};
+            "></div>
           ` : ''}
         </div>
       </ha-card>
