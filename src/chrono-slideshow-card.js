@@ -6,12 +6,19 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.37';
+const CARD_VERSION = '1.1.38';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.38: All root-level card config keys now available as template variables
+//          alongside photo/exif fields. Snake_case keys are converted to
+//          camelCase with a 'card' prefix: e.g. fit_mode -> {{ cardFitMode }},
+//          dimmer_max_opacity -> {{ cardDimmerMaxOpacity }}. One computed
+//          variable added: {{ cardDimmerOpacity }} (0-100, 1 decimal) shows
+//          the current live dimmer opacity. Arrays (zone_modes, zone_alignment,
+//          items) are excluded. Photo fields take precedence on any collision.
 // v1.1.37: dimmer_aggressiveness moved from YAML-only to UI slider (1-100%,
 //          default 50%). Stored as a percentage, converted logarithmically
 //          internally via 10^((pct-50)/50) giving range 0.1-10 where 50% = 1
@@ -3048,13 +3055,33 @@ class ChronoSlideshowCard extends LitElement {
 
     const photo = this._currentPhoto;
     const items = this._config?.items ?? [];
+    const c     = this._config ?? {};
     const seenKeys = new Set();
+
+    // Build card-level template variables — all root-level scalar config
+    // keys, snake_case converted to camelCase with a 'card' prefix, so they
+    // are usable alongside photo fields in any template item without risk of
+    // collision. cardDimmerOpacity is a computed value (0–100, 1 decimal),
+    // not a raw config key.
+    const _toCamel = s => s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    const cardData = {};
+    const skipKeys = new Set(['zone_modes', 'zone_alignment', 'items']);
+    for (const key of Object.keys(DEFAULT_CONFIG)) {
+      if (skipKeys.has(key)) continue;
+      const camelKey = 'card' + _toCamel(key).replace(/^./, ch => ch.toUpperCase());
+      cardData[camelKey] = c[key] ?? DEFAULT_CONFIG[key];
+    }
+    cardData['cardDimmerOpacity'] = Math.round(this._computeDimmerOpacity() * 1000) / 10;
+
+    // Merge: photo fields take precedence over card fields on any collision
+    // (none expected in practice — all card fields are prefixed with 'card').
+    const templateData = { ...cardData, ...photo };
 
     items.forEach((item, index) => {
       if (!('template' in item)) return;
       const key = `item-${index}`;
       seenKeys.add(key);
-      const { text: substituted, fullyLiteral } = substitutePhotoVariables(item.template ?? '', photo);
+      const { text: substituted, fullyLiteral } = substitutePhotoVariables(item.template ?? '', templateData);
       const existing = this._itemSubs.get(key);
 
       if (existing && existing.substituted === substituted) return; // unchanged — leave subscription alone
