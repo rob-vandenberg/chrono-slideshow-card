@@ -6,12 +6,32 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.38';
+const CARD_VERSION = '1.1.39';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.39: Fix: the editor-preview aspect-ratio was silently ignored because
+//          ha-card's own hardcoded height:100% left aspect-ratio with no free
+//          dimension to compute from (per CSS spec, aspect-ratio only fills a
+//          dimension that is otherwise auto). Fixed by making height itself a
+//          variable (--editor-preview-height), set to 'auto' inside the edit
+//          dialog and '100%' otherwise, alongside the existing aspect-ratio
+//          variable. Separately, --scale-factor was never set in the editor
+//          preview either: the ResizeObserver was created in
+//          connectedCallback() and observed the host element directly, but
+//          super.connectedCallback() only schedules Lit's first render, it
+//          does not run it synchronously — so on the dashboard the host's
+//          own height happens to match ha-card's (masking the bug), but in
+//          the editor dialog the host resolves to a real, distinct zero
+//          height while ha-card gets a real height from its own aspect-ratio
+//          rule. Fixed by moving the ResizeObserver's creation and .observe()
+//          call out of connectedCallback() entirely and into firstUpdated()
+//          — a Lit lifecycle method guaranteed to run only after the first
+//          render has patched the shadow DOM, observing ha-card directly
+//          instead of the host. Both fixes originally found and verified on
+//          chrono-tile-card (v1.0.2/v1.0.3/v1.0.6), applied here unchanged.
 // v1.1.38: All root-level card config keys now available as template variables
 //          alongside photo/exif fields. Snake_case keys are converted to
 //          camelCase with a 'card' prefix: e.g. fit_mode -> {{ cardFitMode }},
@@ -2732,13 +2752,34 @@ class ChronoSlideshowCard extends LitElement {
       '--editor-preview-aspect-ratio',
       isInsideEditDialog(this) ? EDITOR_PREVIEW_ASPECT_RATIO : 'auto'
     );
+    this.style.setProperty(
+      '--editor-preview-height',
+      isInsideEditDialog(this) ? 'auto' : '100%'
+    );
+  }
 
+  // Lit calls firstUpdated() exactly once, after the component's first
+  // render has completed and patched the shadow DOM — guaranteeing ha-card
+  // exists (given _config is already set by this point). connectedCallback()
+  // cannot be used for this: super.connectedCallback() only schedules the
+  // first render, it does not run it synchronously, so ha-card is provably
+  // absent from the shadow DOM at any point still inside connectedCallback().
+  // Observing the host element instead (the previous approach) is not
+  // equivalent: on the dashboard the host's own height happens to match
+  // ha-card's, masking the bug, but in the editor dialog the host resolves
+  // to a real, distinct zero height while ha-card still gets a real height
+  // from its own aspect-ratio rule — two different elements with two
+  // different sizes, and the wrong one was being watched.
+  firstUpdated(changedProps) {
+    super.firstUpdated(changedProps);
+    const cardEl = this.shadowRoot?.querySelector('ha-card');
+    if (!cardEl) return;
     this._resizeObserver = new ResizeObserver(entries => {
       const height = entries[0]?.contentRect?.height;
       if (!height) return;
       this.style.setProperty('--scale-factor', height / REFERENCE_HEIGHT_PX);
     });
-    this._resizeObserver.observe(this);
+    this._resizeObserver.observe(cardEl);
   }
 
   disconnectedCallback() {
@@ -3409,7 +3450,7 @@ class ChronoSlideshowCard extends LitElement {
     ha-card {
       position: relative;
       width: 100%;
-      height: 100%;
+      height: var(--editor-preview-height, 100%);
       min-height: 200px;
       aspect-ratio: var(--editor-preview-aspect-ratio, auto);
       overflow: hidden;
