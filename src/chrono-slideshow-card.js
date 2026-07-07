@@ -6,12 +6,28 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.41';
+const CARD_VERSION = '1.1.42';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.42: Breaking change: replaced the 4 independent per-item padding
+//          fields (padding_top/bottom/left/right) with padding_horizontal
+//          (drives both left and right, default 12) and padding_vertical
+//          (drives both top and bottom, default 6) — a lopsided background
+//          pill looks wrong under all circumstances, so symmetric-only is a
+//          deliberate simplification, not a limitation. Added margin_top and
+//          margin_bottom (default 0 each, no min clamp — negative values
+//          allowed for fine-tuning) for edge clearance from the zone/panel
+//          boundary, independent of the background box's own padding —
+//          previously the same padding fields had to do both jobs at once,
+//          which is what caused the "background pill sits below the text,
+//          not evenly behind it" bug (traced to asymmetric padding_top:0/
+//          padding_bottom:20 on a real item). No margin_left/margin_right —
+//          horizontal position is already covered by horizontal/
+//          zone_alignment. Clean break, no migrateConfig() backward
+//          compatibility for the renamed/removed padding_* keys.
 // v1.1.41: Fix: fit_mode 'intelligent' showed black bars on every photo in
 //          the editor preview, not just the first one, confirmed via
 //          repeated console measurement across multiple photo loads.
@@ -614,10 +630,10 @@ const DEFAULT_ITEM = {
   line_height:      1.2,
   border_radius:    50,
   background_color: '',
-  padding_top:      10,
-  padding_bottom:   10,
-  padding_left:     10,
-  padding_right:    10,
+  padding_horizontal: 12,
+  padding_vertical:   6,
+  margin_top:         0,
+  margin_bottom:      0,
   text_shadow_color:        '',
   text_shadow_blur:         0,
   text_shadow_offset_x:     0,
@@ -750,7 +766,7 @@ const DEFAULT_CONFIG = {
 
 const NUMERIC_ITEM_KEYS = new Set([
   'font_size', 'font_weight', 'line_height', 'border_radius',
-  'padding_top', 'padding_bottom', 'padding_left', 'padding_right',
+  'padding_horizontal', 'padding_vertical', 'margin_top', 'margin_bottom',
   'text_shadow_blur', 'text_shadow_offset_x', 'text_shadow_offset_y',
   'text_shadow_stroke_width',
 ]);
@@ -763,7 +779,7 @@ const UI_ITEM_KEYS = new Set([
   'icon', 'show_state',
   'font_color', 'font_size', 'font_weight', 'line_height', 'border_radius',
   'background_color',
-  'padding_top', 'padding_bottom', 'padding_left', 'padding_right',
+  'padding_horizontal', 'padding_vertical', 'margin_top', 'margin_bottom',
   'text_shadow_color', 'text_shadow_blur', 'text_shadow_offset_x',
   'text_shadow_offset_y', 'text_shadow_stroke_width',
 ]);
@@ -2096,13 +2112,13 @@ class ChronoSlideshowCardEditor extends LitElement {
                     ${csTextField('Border\nradius (px)', item.border_radius ?? '', e => this._itemChanged(index, 'border_radius', e), { type: 'number', step: '1', min: '0' })}
                   </div>
 
-                  <!-- Background color and padding -->
+                  <!-- Background color, padding (horizontal/vertical), margin (top/bottom) -->
                   <div class="item-bg-color-padding">
                     ${csColorPicker('Background color', item.background_color ?? '', e => this._itemChanged(index, 'background_color', e))}
-                    ${csTextField('Padding\ntop (px)',    item.padding_top    ?? '', e => this._itemChanged(index, 'padding_top',    e), { type: 'number', step: '1', min: '0' })}
-                    ${csTextField('Padding\nbottom (px)', item.padding_bottom ?? '', e => this._itemChanged(index, 'padding_bottom', e), { type: 'number', step: '1', min: '0' })}
-                    ${csTextField('Padding\nleft (px)',   item.padding_left   ?? '', e => this._itemChanged(index, 'padding_left',   e), { type: 'number', step: '1', min: '0' })}
-                    ${csTextField('Padding\nright (px)',  item.padding_right  ?? '', e => this._itemChanged(index, 'padding_right',  e), { type: 'number', step: '1', min: '0' })}
+                    ${csTextField('Padding\nvertical (px)',   item.padding_vertical   ?? '', e => this._itemChanged(index, 'padding_vertical',   e), { type: 'number', step: '1', min: '0' })}
+                    ${csTextField('Padding\nhorizontal (px)', item.padding_horizontal ?? '', e => this._itemChanged(index, 'padding_horizontal', e), { type: 'number', step: '1', min: '0' })}
+                    ${csTextField('Margin\ntop (px)',         item.margin_top         ?? '', e => this._itemChanged(index, 'margin_top',         e), { type: 'number', step: '1' })}
+                    ${csTextField('Margin\nbottom (px)',      item.margin_bottom      ?? '', e => this._itemChanged(index, 'margin_bottom',      e), { type: 'number', step: '1' })}
                   </div>
 
                   <!-- Text shadow / stroke: color, blur, x/y offset, stroke width -->
@@ -3246,10 +3262,12 @@ class ChronoSlideshowCard extends LitElement {
       'line-height':      raw(item.line_height),
       'border-radius':    pxScaled(item.border_radius),
       'background-color': item.background_color || undefined,
-      'padding-top':      pxScaled(item.padding_top),
-      'padding-bottom':   pxScaled(item.padding_bottom),
-      'padding-left':     pxScaled(item.padding_left),
-      'padding-right':    pxScaled(item.padding_right),
+      'padding-top':      pxScaled(item.padding_vertical),
+      'padding-bottom':   pxScaled(item.padding_vertical),
+      'padding-left':     pxScaled(item.padding_horizontal),
+      'padding-right':    pxScaled(item.padding_horizontal),
+      'margin-top':       pxScaled(item.margin_top),
+      'margin-bottom':    pxScaled(item.margin_bottom),
       'text-shadow':              item.text_shadow_color
         ? Array(Math.max(1, Number(item.text_shadow_layers ?? 2) || 1))
             .fill(`${pxScaled(item.text_shadow_offset_x ?? 0)} ${pxScaled(item.text_shadow_offset_y ?? 0)} ${pxScaled(item.text_shadow_blur ?? 0)} ${item.text_shadow_color}`)
