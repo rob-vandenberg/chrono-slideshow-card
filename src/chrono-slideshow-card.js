@@ -6,12 +6,20 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.48';
+const CARD_VERSION = '1.1.49';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.49: Label rule refined: only px/em suffixes get dropped from labels —
+//          seconds, %, and lux are legitimate unit names and stay. Restored
+//          "%" on "Max opacity"/"Min opacity" (1.1.43 had dropped it
+//          entirely, which this rule now says was wrong for that unit).
+//          "Lux min"/"Lux max" renamed to "Minimum Ambient light (lux)"/
+//          "Maximum Ambient light (lux)". "Margin top"/"Margin bottom"
+//          reordered noun-first to "Top margin"/"Bottom margin", matching
+//          the padding labels' existing convention.
 // v1.1.48: Fix: text-shadow rendering with an empty text_shadow_offset_x or
 //          text_shadow_offset_y silently dropped the entire shadow (blur
 //          included) by accident, not by design — the value is
@@ -2297,8 +2305,8 @@ class ChronoSlideshowCardEditor extends LitElement {
                     ${csColorPicker('Background color', item.background_color ?? '', e => this._itemChanged(index, 'background_color', e))}
                     ${csTextField('Vertical padding',   item.padding_vertical   ?? '', e => this._itemChanged(index, 'padding_vertical',   e), { type: 'number', step: '1', min: '0' })}
                     ${csTextField('Horizontal padding', item.padding_horizontal ?? '', e => this._itemChanged(index, 'padding_horizontal', e), { type: 'number', step: '1', min: '0' })}
-                    ${csTextField('Margin top',         item.margin_top         ?? '', e => this._itemChanged(index, 'margin_top',         e), { type: 'number', step: '1' })}
-                    ${csTextField('Margin bottom',      item.margin_bottom      ?? '', e => this._itemChanged(index, 'margin_bottom',      e), { type: 'number', step: '1' })}
+                    ${csTextField('Top margin',         item.margin_top         ?? '', e => this._itemChanged(index, 'margin_top',         e), { type: 'number', step: '1' })}
+                    ${csTextField('Bottom margin',      item.margin_bottom      ?? '', e => this._itemChanged(index, 'margin_bottom',      e), { type: 'number', step: '1' })}
                   </div>
 
                   <!-- Text shadow / stroke: color, blur, x/y offset, stroke width -->
@@ -2784,12 +2792,12 @@ class ChronoSlideshowCardEditor extends LitElement {
           ></ha-entity-picker>
         </div>
         <div class="card-row">
-          ${csTextField('Lux min', c.dimmer_lux_min ?? 0, e => this._numericValueChanged('dimmer_lux_min', e), { type: 'number', step: '1', min: '0' })}
-          ${csTextField('Lux max', c.dimmer_lux_max ?? 40, e => this._numericValueChanged('dimmer_lux_max', e), { type: 'number', step: '1', min: '0' })}
+          ${csTextField('Minimum Ambient light (lux)', c.dimmer_lux_min ?? 0, e => this._numericValueChanged('dimmer_lux_min', e), { type: 'number', step: '1', min: '0' })}
+          ${csTextField('Maximum Ambient light (lux)', c.dimmer_lux_max ?? 40, e => this._numericValueChanged('dimmer_lux_max', e), { type: 'number', step: '1', min: '0' })}
         </div>
         <div class="card-row">
-          ${csTextField('Max opacity', c.dimmer_max_opacity ?? 80, e => this._numericValueChanged('dimmer_max_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
-          ${csTextField('Min opacity', c.dimmer_min_opacity ?? 0, e => this._numericValueChanged('dimmer_min_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
+          ${csTextField('Max opacity %', c.dimmer_max_opacity ?? 80, e => this._numericValueChanged('dimmer_max_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
+          ${csTextField('Min opacity %', c.dimmer_min_opacity ?? 0, e => this._numericValueChanged('dimmer_min_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
         </div>
         <div class="card-row-1">
           <div class="slider-field">
