@@ -6,12 +6,25 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.40';
+const CARD_VERSION = '1.1.41';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.41: Fix: fit_mode 'intelligent' showed black bars on every photo in
+//          the editor preview, not just the first one, confirmed via
+//          repeated console measurement across multiple photo loads.
+//          _onSlideImageLoad() measured the host element's own
+//          getBoundingClientRect(), which reports zero height for the
+//          entire time the editor dialog is open (a persistent structural
+//          fact, not a brief timing gap) — its guard clause bailed out on
+//          every single photo load, leaving _slotIntelligentSizeA/B stuck
+//          at null and falling back to non-intelligent sizing. Fixed by
+//          measuring ha-card's rect instead, which gets a real height from
+//          its own aspect-ratio rule regardless of the host's collapsed
+//          box — same reasoning as the --scale-factor fix in 1.1.39/1.1.40,
+//          applied to this separate, independent code path.
 // v1.1.40: Fix regression from 1.1.39: on the live dashboard (not the editor
 //          preview), --scale-factor was permanently stuck/unset, rendering
 //          every item and the pause indicator at roughly half size. Cause:
@@ -3347,8 +3360,16 @@ class ChronoSlideshowCard extends LitElement {
   _onSlideImageLoad(e, fitMode, slotId) {
     if (fitMode !== 'intelligent') return;
     const img = e.target;
-    const rect = this.getBoundingClientRect();
-    if (!rect.width || !rect.height || !img.naturalWidth || !img.naturalHeight) return;
+    // Measure ha-card, not the host element (this): confirmed via repeated
+    // console measurement that the host reports zero height for the entire
+    // time the editor dialog is open, not just briefly at startup — every
+    // single photo load was silently bailing out below, showing black bars
+    // with no self-correction. ha-card gets a real height from its own
+    // aspect-ratio rule regardless of the host's collapsed box, same
+    // reasoning as the --scale-factor fix elsewhere in this file.
+    const cardEl = this.shadowRoot?.querySelector('ha-card');
+    const rect = cardEl?.getBoundingClientRect();
+    if (!rect || !rect.width || !rect.height || !img.naturalWidth || !img.naturalHeight) return;
     const cfg = this._config ?? {};
     const result = computeIntelligentFit(
       img.naturalWidth, img.naturalHeight,
