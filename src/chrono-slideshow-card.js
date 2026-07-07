@@ -6,12 +6,26 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.46';
+const CARD_VERSION = '1.1.47';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.47: Zones panel row height 40px -> 48px (40 judged too shallow after
+//          seeing it rendered). Zone margin sign convention changed to be
+//          more intuitive to a human configuring it: +x is right, -x is
+//          left (unchanged), +y is now UP, -y is now DOWN, for every zone
+//          regardless of which corner/edge it's pinned to — CSS's own Y
+//          axis runs the opposite way, so the render code now negates the
+//          configured y value once, at the point the transform is built;
+//          nowhere else needs to know about this flip. Default magnitude
+//          increased from 8 to 12, defaults' signs updated to match the new
+//          convention while reproducing the same net visual result as
+//          before (top row: y 8 -> -12, bottom row: y -8 -> 12, middle row
+//          unchanged at 0; x defaults unchanged in sign, only magnitude
+//          changed). Zones panel hint text updated to state the sign
+//          convention explicitly.
 // v1.1.46: Zones panel row-height fix: Transition/Alignment (CsSelect, 56px —
 //          the same fixed height used by every dropdown throughout the whole
 //          editor) and the new Margins mini-fields (32px) looked
@@ -732,34 +746,40 @@ const DEFAULT_ZONE_ALIGNMENT = {
   'bottom-right':  'right',
 };
 
-// Per-zone position fine-tuning, replacing the old fixed 8px padding that
-// used to sit uniformly on .overlay-zone regardless of which edge it was
-// pinned to. Signed so each zone's default reproduces that exact old inset
-// direction: left-column zones shift right (+8), right-column shift left
-// (-8), center columns don't shift horizontally (0) — same logic for
-// top/middle/bottom rows on the Y axis. A zone in a corner gets both.
+// Per-zone position fine-tuning. Human-facing sign convention: +X is right,
+// -X is left, +Y is UP, -Y is DOWN — for every zone, regardless of which
+// corner/edge it's pinned to (the more intuitive convention for a person
+// configuring this, even though CSS's own Y axis runs the opposite way —
+// the rendering code negates the configured Y value when building the
+// transform, so this file's internal sign flip is invisible to the user).
+// Defaults reproduce the visual effect of the old fixed 8px padding
+// (magnitude increased to 12): left-column zones shift right (+12),
+// right-column shift left (-12), center columns don't shift horizontally
+// (0); top-row zones shift down (-12 under this convention), bottom-row
+// zones shift up (+12), middle row doesn't shift vertically (0). A zone in
+// a corner gets both.
 const DEFAULT_ZONE_OFFSET_X = {
-  'top-left':      8,
+  'top-left':      12,
   'top-center':    0,
-  'top-right':    -8,
-  'middle-left':   8,
+  'top-right':    -12,
+  'middle-left':   12,
   'middle-center': 0,
-  'middle-right': -8,
-  'bottom-left':   8,
+  'middle-right': -12,
+  'bottom-left':   12,
   'bottom-center': 0,
-  'bottom-right': -8,
+  'bottom-right': -12,
 };
 
 const DEFAULT_ZONE_OFFSET_Y = {
-  'top-left':      8,
-  'top-center':    8,
-  'top-right':     8,
-  'middle-left':   0,
-  'middle-center': 0,
-  'middle-right':  0,
-  'bottom-left':  -8,
-  'bottom-center':-8,
-  'bottom-right': -8,
+  'top-left':     -12,
+  'top-center':   -12,
+  'top-right':    -12,
+  'middle-left':    0,
+  'middle-center':  0,
+  'middle-right':   0,
+  'bottom-left':   12,
+  'bottom-center': 12,
+  'bottom-right':  12,
 };
 
 // Reference card height (px) at which a font_size value renders at its
@@ -2084,10 +2104,12 @@ class ChronoSlideshowCardEditor extends LitElement {
           with the photo. Alignment controls how multiple items stacked in the
           same zone align relative to each other — independent from which
           screen position the zone itself occupies. Margins shift the entire
-          zone's contents left/right (x) and up/down (y), since a zone does
-          not stretch to fill its 1/3 of the screen — it sits pinned to
-          whichever edge its column/row dictates. All overlay items placed
-          in a zone share that zone's settings.
+          zone's contents, since a zone does not stretch to fill its 1/3 of
+          the screen — it sits pinned to whichever edge its column/row
+          dictates. Positive x moves right, negative x moves left; positive
+          y moves up, negative y moves down — for every zone, regardless of
+          which corner or edge it's in. All overlay items placed in a zone
+          share that zone's settings.
         </p>
         ${bands.map(band => {
           const cols = _GROUP_DEFS.filter(g => g.vertical === band); // left, center, right in order
@@ -2451,15 +2473,16 @@ class ChronoSlideshowCardEditor extends LitElement {
     }
 
     /* Zones panel only: both the Transition/Alignment selects and the
-       Margins mini-fields share one uniform 40px row height — the select's
+       Margins mini-fields share one uniform 48px row height — the select's
        own default (56px, used everywhere else in the editor) and the
-       mini-field's original 32px were too far apart from each other. */
+       mini-field's original 32px were too far apart from each other; 40px
+       (tried first) was judged too shallow. */
     .zone-band-grid chrono-cs-select::part(combobox) {
-      height: 40px;
+      height: 48px;
     }
 
     .zone-offset-mini::part(input) {
-      height: 40px;
+      height: 48px;
       font-size: 13px;
       text-align: center;
       padding: 0 4px;
@@ -3506,10 +3529,14 @@ class ChronoSlideshowCard extends LitElement {
     const alignment = this._config?.zone_alignment?.[zoneKey] ?? DEFAULT_ZONE_ALIGNMENT[zoneKey] ?? horizontal;
     const offsetX   = this._config?.zone_offset_x?.[zoneKey] ?? DEFAULT_ZONE_OFFSET_X[zoneKey] ?? 0;
     const offsetY   = this._config?.zone_offset_y?.[zoneKey] ?? DEFAULT_ZONE_OFFSET_Y[zoneKey] ?? 0;
+    // CSS translateY's positive direction is down; the configured value's
+    // positive direction is up (see DEFAULT_ZONE_OFFSET_Y's comment) — this
+    // negation is the one place that sign convention actually gets applied.
+    const cssOffsetY = -offsetY;
     return html`
       <div
         class="overlay-zone overlay-zone-align-${alignment}"
-        style="transform: translate(calc(${offsetX}px * var(--scale-factor, 1)), calc(${offsetY}px * var(--scale-factor, 1)));"
+        style="transform: translate(calc(${offsetX}px * var(--scale-factor, 1)), calc(${cssOffsetY}px * var(--scale-factor, 1)));"
       >
         ${items.map(item => this._renderItem(item, indexOf.get(item)))}
       </div>
