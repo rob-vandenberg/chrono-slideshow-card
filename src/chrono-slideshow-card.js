@@ -6,12 +6,31 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.49';
+const CARD_VERSION = '1.1.50';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.50: DEFAULT_ITEM overhaul: font_color '#FFFFFF' (was ''), font_size 1
+//          (was 1.2), font_weight 400 (was 600); line_height, border_radius,
+//          padding_horizontal, padding_vertical, margin_top, margin_bottom,
+//          text_shadow_blur, text_shadow_offset_x, text_shadow_offset_y,
+//          text_shadow_stroke_width all now '' (empty) instead of a numeric
+//          default — background_color and text_shadow_color were already
+//          '' and stay that way. New shadow-field interlock in
+//          _itemChanged(), two independent behaviors: (1) while
+//          text_shadow_color is set, attempting to clear blur/offset-x/
+//          offset-y snaps that field back to 0 instead — the only way to
+//          actually empty them is to first clear the color; (2) the moment
+//          text_shadow_color transitions from empty to a real value, any of
+//          blur/offset-x/offset-y that are CURRENTLY empty (not ones that
+//          already hold a value) get filled with 0 once, so a valid shadow
+//          renders immediately without the user having to fill three more
+//          fields by hand. Neither behavior touches
+//          text_shadow_stroke_width — confirmed no CSS grammar coupling
+//          between stroke and shadow, so stroke keeps the plain
+//          always-clearable behavior every other field has.
 // v1.1.49: Label rule refined: only px/em suffixes get dropped from labels —
 //          seconds, %, and lux are legitimate unit names and stay. Restored
 //          "%" on "Max opacity"/"Min opacity" (1.1.43 had dropped it
@@ -717,21 +736,21 @@ const DEFAULT_ITEM = {
   vertical:         'middle',
   icon:             '',
   show_state:       false,
-  font_color:       '',
-  font_size:        1.2,
-  font_weight:      600,
-  line_height:      1.2,
-  border_radius:    50,
+  font_color:       '#FFFFFF',
+  font_size:        1,
+  font_weight:      400,
+  line_height:      '',
+  border_radius:    '',
   background_color: '',
-  padding_horizontal: 12,
-  padding_vertical:   6,
-  margin_top:         0,
-  margin_bottom:      0,
+  padding_horizontal: '',
+  padding_vertical:   '',
+  margin_top:         '',
+  margin_bottom:      '',
   text_shadow_color:        '',
-  text_shadow_blur:         0,
-  text_shadow_offset_x:     0,
-  text_shadow_offset_y:     0,
-  text_shadow_stroke_width: 0,
+  text_shadow_blur:         '',
+  text_shadow_offset_x:     '',
+  text_shadow_offset_y:     '',
+  text_shadow_stroke_width: '',
   text_shadow_layers:       2, // YAML-only, no dedicated UI field — edit manually to change
 };
 
@@ -900,6 +919,15 @@ const NUMERIC_ITEM_KEYS = new Set([
   'padding_horizontal', 'padding_vertical', 'margin_top', 'margin_bottom',
   'text_shadow_blur', 'text_shadow_offset_x', 'text_shadow_offset_y',
   'text_shadow_stroke_width',
+]);
+
+// While text_shadow_color is set, these three cannot be emptied directly —
+// see _itemChanged(). text_shadow_stroke_width is deliberately excluded:
+// the stroke is independent of the shadow (verified — no CSS grammar
+// coupling), so it keeps the plain "empty is always allowed" behavior every
+// other field has.
+const SHADOW_DEPENDENT_KEYS = new Set([
+  'text_shadow_blur', 'text_shadow_offset_x', 'text_shadow_offset_y',
 ]);
 
 // Keys managed by dedicated UI fields. All other keys go into the YAML textarea.
@@ -1965,11 +1993,31 @@ class ChronoSlideshowCardEditor extends LitElement {
       const parsed = csParseNumber(raw);
       if (parsed === null) return;
       value = parsed;
+      // Once a shadow color is set, blur/offset-x/offset-y cannot be
+      // cleared directly — the only way to make the shadow disappear is to
+      // clear the color itself. An attempted clear snaps back to 0 instead.
+      if (value === '' && SHADOW_DEPENDENT_KEYS.has(key) && this._config.items[index]?.text_shadow_color) {
+        value = 0;
+      }
     } else {
       value = raw;
     }
-    let items    = [...(this._config.items ?? [])];
-    items[index] = { ...items[index], [key]: value };
+    let items      = [...(this._config.items ?? [])];
+    const wasColor = items[index]?.text_shadow_color;
+    let   updated  = { ...items[index], [key]: value };
+    // The moment text_shadow_color transitions from empty to a real value,
+    // any of blur/offset-x/offset-y that are CURRENTLY empty (only the ones
+    // actually empty — a field that already has a value, even 0 itself, is
+    // left untouched) get filled with 0, once, so a valid shadow renders
+    // immediately without requiring the user to fill three more fields by
+    // hand. Does not fire when clearing color, and does not re-fire on
+    // every subsequent color edit once color already had a value.
+    if (key === 'text_shadow_color' && !wasColor && value) {
+      for (const depKey of SHADOW_DEPENDENT_KEYS) {
+        if (updated[depKey] === '') updated[depKey] = 0;
+      }
+    }
+    items[index] = updated;
     if (key === 'horizontal' || key === 'vertical') items = sortItems(items);
     this._config = { ...this._config, items };
     this._fireConfig();
