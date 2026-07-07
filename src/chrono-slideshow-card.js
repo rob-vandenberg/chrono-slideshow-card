@@ -3,15 +3,28 @@ import { live }                  from 'https://unpkg.com/lit@2.0.0/directives/li
 import { styleMap }              from 'https://unpkg.com/lit@2.0.0/directives/style-map.js?module';
 import { unsafeHTML }            from 'https://unpkg.com/lit@2.0.0/directives/unsafe-html.js?module';
 import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/repeat.js?module';
-import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.51';
+const CARD_VERSION = '1.1.52';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.52: Removed confirmed-dead code, audited line-by-line before removal
+//          (every reference traced, not just the symbol names): the
+//          per-item YAML-extras mechanism — serializeExtrasToYaml,
+//          parseYamlExtras, _itemYamlChanged (never bound to any event
+//          handler, unreachable), UI_CARD_KEYS, UI_ITEM_KEYS (used only by
+//          the also-removed code), and the extrasYaml local variable
+//          (computed, never read). The jsyaml import is also removed — its
+//          only two consumers were the two functions just deleted, so it
+//          became dead as a direct consequence. CsTextarea/
+//          chrono-cs-textarea is deliberately KEPT despite being similarly
+//          unused today — a reusable library component for a future editor
+//          feature, not part of this cleanup. No functional change: none
+//          of the removed code was reachable, so nothing rendered or
+//          behaved any differently before or after.
 // v1.1.51: Fix: --scale-factor intermittently stuck permanently unset on a
 //          fresh page load (reproducible via Ctrl+F5, roughly 50/50).
 //          Diagnosed with temporary debug logging (localStorage-backed,
@@ -948,34 +961,6 @@ const SHADOW_DEPENDENT_KEYS = new Set([
   'text_shadow_blur', 'text_shadow_offset_x', 'text_shadow_offset_y',
 ]);
 
-// Keys managed by dedicated UI fields. All other keys go into the YAML textarea.
-const UI_ITEM_KEYS = new Set([
-  '_id', 'show',
-  'entity', 'template',
-  'horizontal', 'vertical',
-  'icon', 'show_state',
-  'font_color', 'font_size', 'font_weight', 'line_height', 'border_radius',
-  'background_color',
-  'padding_horizontal', 'padding_vertical', 'margin_top', 'margin_bottom',
-  'text_shadow_color', 'text_shadow_blur', 'text_shadow_offset_x',
-  'text_shadow_offset_y', 'text_shadow_stroke_width',
-]);
-
-const UI_CARD_KEYS = new Set([
-  'type', 'entity', 'sort_by', 'sort_reverse', 'display_time',
-  'transition', 'transition_duration', 'fit_mode', 'zone_modes', 'zone_alignment',
-  'items',
-  // tap is hardcoded to pause/resume now, not part of the generic action
-  // system — tap_action is deliberately not in this list, it's never read.
-  'hold_action', 'double_tap_action', 'swipe_up_action', 'swipe_down_action',
-  // letterbox_color is deliberately not in this list — YAML-only, no
-  // dedicated UI field, same convention as text_shadow_layers.
-  // maxZoom/maxStretch/maxGap/zoomCenter are the same — YAML-only, no UI field.
-  // dimmer_color is YAML-only; all other dimmer settings have UI fields.
-  'dimmer_enabled', 'dimmer_entity', 'dimmer_lux_min', 'dimmer_lux_max',
-  'dimmer_min_opacity', 'dimmer_max_opacity', 'dimmer_aggressiveness',
-]);
-
 const VERTICAL_OPTIONS = [
   { label: 'Top',    value: 'top'    },
   { label: 'Middle', value: 'middle' },
@@ -1231,32 +1216,6 @@ function migrateConfig(config) {
   }
 
   return { config, migrated };
-}
-
-// ─── YAML helpers ─────────────────────────────────────────────────────────────
-function serializeExtrasToYaml(obj, uiKeys) {
-  const extras = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (!uiKeys.has(k)) extras[k] = v;
-  }
-  if (!Object.keys(extras).length) return '';
-  try {
-    return jsyaml.dump(extras, { indent: 2 }).trimEnd();
-  } catch (e) {
-    return '';
-  }
-}
-
-function parseYamlExtras(text) {
-  const trimmed = (text ?? '').trim();
-  if (!trimmed) return {};
-  try {
-    const parsed = jsyaml.load(trimmed);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-    return null;
-  } catch (e) {
-    return null;
-  }
 }
 
 // ─── Home Assistant action compatibility ────────────────────────────────────────
@@ -2041,25 +2000,6 @@ class ChronoSlideshowCardEditor extends LitElement {
     this._fireConfig();
   }
 
-  // ── Item-level YAML textarea changed ─────────────────────────────────────
-  _itemYamlChanged(index, e) {
-    if (!this._config) return;
-    this._clearUndo();
-    const text   = e.target.value ?? e.detail?.value ?? '';
-    const parsed = parseYamlExtras(text);
-    if (parsed === null) return; // invalid YAML — don't save
-    const items  = [...(this._config.items ?? [])];
-    const item   = items[index];
-    // Keep only UI-controlled keys from the existing item, then merge extras
-    const clean  = {};
-    for (const [k, v] of Object.entries(item)) {
-      if (UI_ITEM_KEYS.has(k)) clean[k] = v;
-    }
-    items[index]     = { ...clean, ...parsed };
-    this._config     = { ...this._config, items };
-    this._fireConfig();
-  }
-
   _itemToggled(index, key, e) {
     if (!this._config) return;
     this._clearUndo();
@@ -2294,8 +2234,6 @@ class ChronoSlideshowCardEditor extends LitElement {
                         ? item.template.slice(0, 30) + '…'
                         : item.template)
                     : `Template ${index + 1}`);
-
-              const extrasYaml = serializeExtrasToYaml(item, UI_ITEM_KEYS);
 
               return html`
                 <ha-expansion-panel
