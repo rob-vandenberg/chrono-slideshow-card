@@ -6,12 +6,27 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.42';
+const CARD_VERSION = '1.1.44';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.44: Partial revert of 1.1.43's blanket unit-suffix removal: restored
+//          "Display time (seconds)". "Transition duration" also restored
+//          with a unit suffix, but spelled out as "(seconds)" rather than
+//          1.1.42's original abbreviated "(s)". Every other label from
+//          1.1.43 (item-level fields, Max/Min opacity) stays suffix-free.
+// v1.1.43: Editor labels: dropped all unit-identifier suffixes ("(px)",
+//          "(em)", "(s)", "(%)", "(seconds)") from every numeric field label
+//          — the immediate trigger was "Padding horizontal (px)" wrapping to
+//          3 ugly lines after v1.1.42's rename, but the same suffix pattern
+//          existed on Font size, Border radius, the 2 margin fields, all 4
+//          shadow/stroke fields, Display time, Transition duration, and Max/
+//          Min opacity — all of it dropped for consistency. Padding/margin
+//          labels also reordered to noun-first ("Horizontal padding" /
+//          "Vertical padding"), and their forced \n line-breaks removed —
+//          short enough now to wrap naturally without a manual split point.
 // v1.1.42: Breaking change: replaced the 4 independent per-item padding
 //          fields (padding_top/bottom/left/right) with padding_horizontal
 //          (drives both left and right, default 12) and padding_vertical
@@ -2106,28 +2121,28 @@ class ChronoSlideshowCardEditor extends LitElement {
                   <!-- Typography: font color, size, weight, line height, border radius -->
                   <div class="item-typography">
                     ${csColorPicker('Font color', item.font_color ?? '', e => this._itemChanged(index, 'font_color', e))}
-                    ${csTextField('Font size (em)', item.font_size   ?? '', e => this._itemChanged(index, 'font_size',   e), { type: 'number', step: '0.1', min: '0' })}
+                    ${csTextField('Font size', item.font_size   ?? '', e => this._itemChanged(index, 'font_size',   e), { type: 'number', step: '0.1', min: '0' })}
                     ${csTextField('Font weight',    item.font_weight ?? '', e => this._itemChanged(index, 'font_weight', e), { type: 'number', step: '100', min: '100', max: '900' })}
                     ${csTextField('Line height',    item.line_height ?? '', e => this._itemChanged(index, 'line_height', e), { type: 'number', step: '0.1', min: '0' })}
-                    ${csTextField('Border\nradius (px)', item.border_radius ?? '', e => this._itemChanged(index, 'border_radius', e), { type: 'number', step: '1', min: '0' })}
+                    ${csTextField('Border radius', item.border_radius ?? '', e => this._itemChanged(index, 'border_radius', e), { type: 'number', step: '1', min: '0' })}
                   </div>
 
                   <!-- Background color, padding (horizontal/vertical), margin (top/bottom) -->
                   <div class="item-bg-color-padding">
                     ${csColorPicker('Background color', item.background_color ?? '', e => this._itemChanged(index, 'background_color', e))}
-                    ${csTextField('Padding\nvertical (px)',   item.padding_vertical   ?? '', e => this._itemChanged(index, 'padding_vertical',   e), { type: 'number', step: '1', min: '0' })}
-                    ${csTextField('Padding\nhorizontal (px)', item.padding_horizontal ?? '', e => this._itemChanged(index, 'padding_horizontal', e), { type: 'number', step: '1', min: '0' })}
-                    ${csTextField('Margin\ntop (px)',         item.margin_top         ?? '', e => this._itemChanged(index, 'margin_top',         e), { type: 'number', step: '1' })}
-                    ${csTextField('Margin\nbottom (px)',      item.margin_bottom      ?? '', e => this._itemChanged(index, 'margin_bottom',      e), { type: 'number', step: '1' })}
+                    ${csTextField('Vertical padding',   item.padding_vertical   ?? '', e => this._itemChanged(index, 'padding_vertical',   e), { type: 'number', step: '1', min: '0' })}
+                    ${csTextField('Horizontal padding', item.padding_horizontal ?? '', e => this._itemChanged(index, 'padding_horizontal', e), { type: 'number', step: '1', min: '0' })}
+                    ${csTextField('Margin top',         item.margin_top         ?? '', e => this._itemChanged(index, 'margin_top',         e), { type: 'number', step: '1' })}
+                    ${csTextField('Margin bottom',      item.margin_bottom      ?? '', e => this._itemChanged(index, 'margin_bottom',      e), { type: 'number', step: '1' })}
                   </div>
 
                   <!-- Text shadow / stroke: color, blur, x/y offset, stroke width -->
                   <div class="item-text-shadow">
                     ${csColorPicker('Shadow color', item.text_shadow_color ?? '', e => this._itemChanged(index, 'text_shadow_color', e))}
-                    ${csTextField('Shadow\nblur (px)',     item.text_shadow_blur         ?? '', e => this._itemChanged(index, 'text_shadow_blur',         e), { type: 'number', step: '1', min: '0' })}
-                    ${csTextField('Shadow\noffset X (px)', item.text_shadow_offset_x     ?? '', e => this._itemChanged(index, 'text_shadow_offset_x',     e), { type: 'number', step: '1' })}
-                    ${csTextField('Shadow\noffset Y (px)', item.text_shadow_offset_y     ?? '', e => this._itemChanged(index, 'text_shadow_offset_y',     e), { type: 'number', step: '1' })}
-                    ${csTextField('Stroke\nwidth (px)',    item.text_shadow_stroke_width ?? '', e => this._itemChanged(index, 'text_shadow_stroke_width', e), { type: 'number', step: '1', min: '0' })}
+                    ${csTextField('Shadow blur',     item.text_shadow_blur         ?? '', e => this._itemChanged(index, 'text_shadow_blur',         e), { type: 'number', step: '1', min: '0' })}
+                    ${csTextField('Shadow offset X', item.text_shadow_offset_x     ?? '', e => this._itemChanged(index, 'text_shadow_offset_x',     e), { type: 'number', step: '1' })}
+                    ${csTextField('Shadow offset Y', item.text_shadow_offset_y     ?? '', e => this._itemChanged(index, 'text_shadow_offset_y',     e), { type: 'number', step: '1' })}
+                    ${csTextField('Stroke width',    item.text_shadow_stroke_width ?? '', e => this._itemChanged(index, 'text_shadow_stroke_width', e), { type: 'number', step: '1', min: '0' })}
                   </div>
 
                   <!-- Remove button -->
@@ -2560,7 +2575,7 @@ class ChronoSlideshowCardEditor extends LitElement {
         <!-- Transition + transition duration -->
         <div class="card-row">
           ${csSelectField('Transition', c.transition ?? 'fade', this._transitionOptions, e => this._valueChanged('transition', e))}
-          ${csTextField('Transition duration (s)', c.transition_duration ?? 0.6, e => this._numericValueChanged('transition_duration', e), { type: 'number', step: '0.1', min: '0' })}
+          ${csTextField('Transition duration (seconds)', c.transition_duration ?? 0.6, e => this._numericValueChanged('transition_duration', e), { type: 'number', step: '0.1', min: '0' })}
         </div>
 
         <!-- Dimmer -->
@@ -2582,8 +2597,8 @@ class ChronoSlideshowCardEditor extends LitElement {
           ${csTextField('Lux max', c.dimmer_lux_max ?? 40, e => this._numericValueChanged('dimmer_lux_max', e), { type: 'number', step: '1', min: '0' })}
         </div>
         <div class="card-row">
-          ${csTextField('Max opacity (%)', c.dimmer_max_opacity ?? 80, e => this._numericValueChanged('dimmer_max_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
-          ${csTextField('Min opacity (%)', c.dimmer_min_opacity ?? 0, e => this._numericValueChanged('dimmer_min_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
+          ${csTextField('Max opacity', c.dimmer_max_opacity ?? 80, e => this._numericValueChanged('dimmer_max_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
+          ${csTextField('Min opacity', c.dimmer_min_opacity ?? 0, e => this._numericValueChanged('dimmer_min_opacity', e), { type: 'number', step: '1', min: '0', max: '100' })}
         </div>
         <div class="card-row-1">
           <div class="slider-field">
