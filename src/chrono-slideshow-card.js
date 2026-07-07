@@ -6,12 +6,30 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.50';
+const CARD_VERSION = '1.1.51';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.51: Fix: --scale-factor intermittently stuck permanently unset on a
+//          fresh page load (reproducible via Ctrl+F5, roughly 50/50).
+//          Diagnosed with temporary debug logging (localStorage-backed,
+//          survives a hard reload) rather than guessed: HA/Lovelace can
+//          rapidly disconnect and reconnect the same card instance during
+//          initial page layout, within milliseconds, before the
+//          ResizeObserver attached on first connect ever gets its first
+//          callback. disconnectedCallback() called .disconnect() on the
+//          observer but never cleared _observedCardEl — so when the
+//          reconnect landed on the exact same ha-card DOM node (confirmed
+//          via log: same component instance, node identity preserved
+//          across the cycle), _attachResizeObserverIfNeeded()'s guard saw
+//          cardEl === _observedCardEl, concluded a valid attach already
+//          existed, and skipped re-attaching — even though the observer it
+//          believed was still watching had just been killed. Fixed by also
+//          nulling _resizeObserver and _observedCardEl in
+//          disconnectedCallback(), so any later reconnect is always treated
+//          as needing a fresh attach, regardless of node identity.
 // v1.1.50: DEFAULT_ITEM overhaul: font_color '#FFFFFF' (was ''), font_size 1
 //          (was 1.2), font_weight 400 (was 600); line_height, border_radius,
 //          padding_horizontal, padding_vertical, margin_top, margin_bottom,
@@ -3119,7 +3137,19 @@ class ChronoSlideshowCard extends LitElement {
     super.disconnectedCallback();
     this._teardownSubscriptions();
     this._stopTimer();
+    // Clearing both, not just disconnecting: _attachResizeObserverIfNeeded()'s
+    // guard only compares cardEl === this._observedCardEl — it has no way to
+    // know the observer behind that node was just killed. Confirmed via
+    // debug logging: a reconnect can land on the exact same ha-card node
+    // (same component instance, node identity preserved across a rapid
+    // disconnect/reconnect within the same page-layout pass) — the guard
+    // then sees sameNodeAsBefore=true and skips re-attaching entirely,
+    // leaving --scale-factor permanently unset for the rest of that page
+    // load. Nulling both here forces the next _attachResizeObserverIfNeeded()
+    // call to always treat reconnection as "needs a fresh attach."
     this._resizeObserver?.disconnect();
+    this._resizeObserver = null;
+    this._observedCardEl = null;
   }
 
   // ── Load files from the chrono_folder sensor, sort, and (re)start ───────────
