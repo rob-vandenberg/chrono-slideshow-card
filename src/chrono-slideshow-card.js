@@ -6,12 +6,31 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.47';
+const CARD_VERSION = '1.1.48';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.48: Fix: text-shadow rendering with an empty text_shadow_offset_x or
+//          text_shadow_offset_y silently dropped the entire shadow (blur
+//          included) by accident, not by design — the value is
+//          hand-assembled as a single string via template literals before
+//          reaching styleMap, so an empty offset stringified as the literal
+//          text "undefined" inside it, producing invalid CSS the browser
+//          discarded wholesale. Every other item field (font-size,
+//          border-radius, padding, margin, stroke-width/color, etc.) was
+//          already correct — each is its own independent styleMap key, and
+//          styleMap already omits undefined keys cleanly by design. Only
+//          the offset pair is special: CSS's own <shadow> grammar requires
+//          both offset-x and offset-y whenever a shadow is specified at
+//          all, so unlike blur or color (each independently optional),
+//          there's no valid syntax for a shadow with just one offset
+//          present. Fixed by gating text-shadow's render condition on both
+//          offsets being non-empty explicitly, alongside the existing
+//          text_shadow_color check — same net visual result as before, now
+//          an intentional condition rather than an accident of browser
+//          error recovery.
 // v1.1.47: Zones panel row height 40px -> 48px (40 judged too shallow after
 //          seeing it rendered). Zone margin sign convention changed to be
 //          more intuitive to a human configuring it: +x is right, -x is
@@ -3455,7 +3474,7 @@ class ChronoSlideshowCard extends LitElement {
       'padding-right':    pxScaled(item.padding_horizontal),
       'margin-top':       pxScaled(item.margin_top),
       'margin-bottom':    pxScaled(item.margin_bottom),
-      'text-shadow':              item.text_shadow_color
+      'text-shadow':              (item.text_shadow_color && item.text_shadow_offset_x !== '' && item.text_shadow_offset_y !== '')
         ? Array(Math.max(1, Number(item.text_shadow_layers ?? 2) || 1))
             .fill(`${pxScaled(item.text_shadow_offset_x ?? 0)} ${pxScaled(item.text_shadow_offset_y ?? 0)} ${pxScaled(item.text_shadow_blur ?? 0)} ${item.text_shadow_color}`)
             .join(', ')
