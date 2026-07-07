@@ -6,12 +6,37 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.39';
+const CARD_VERSION = '1.1.40';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.40: Fix regression from 1.1.39: on the live dashboard (not the editor
+//          preview), --scale-factor was permanently stuck/unset, rendering
+//          every item and the pause indicator at roughly half size. Cause:
+//          render() has three branches (sensor-not-found / no-photos / real
+//          content), each producing a distinct <ha-card>; when the active
+//          branch changes, Lit discards and recreates the whole subtree,
+//          including a new <ha-card>. 1.1.39's firstUpdated() (which runs
+//          exactly once, ever) could attach its ResizeObserver to whichever
+//          branch happened to render first — if that was an early branch
+//          (e.g. files still loading), the observer was left watching a
+//          node Lit later discarded, never firing again. The editor preview
+//          didn't show this because it typically renders the real-content
+//          branch immediately. Confirmed via console: a fresh observer on
+//          the live ha-card fired instantly with the correct height while
+//          the original one never fired again. Fixed by extracting the
+//          attach/observe logic into _attachResizeObserverIfNeeded(),
+//          called from this class's existing updated() (which already runs
+//          after every render for the transition-animation logic) instead
+//          of firstUpdated() — re-attaching only when the ha-card node
+//          itself has changed (tracked via _observedCardEl), a no-op on the
+//          overwhelming majority of renders where it hasn't. Deliberately
+//          NOT a second updated() method: this class already has one, and a
+//          same-named duplicate would have silently replaced it rather than
+//          merging with it — caught and corrected before shipping, not
+//          after.
 // v1.1.39: Fix: the editor-preview aspect-ratio was silently ignored because
 //          ha-card's own hardcoded height:100% left aspect-ratio with no free
 //          dimension to compute from (per CSS spec, aspect-ratio only fills a
@@ -2685,6 +2710,7 @@ class ChronoSlideshowCard extends LitElement {
     this._resolvedTransitionName = 'fade'; // settles a 'random' pick once per advance, shared with _runTransitionAnimations
     this._transitionId          = 0;
     this._resizeObserver      = null;
+    this._observedCardEl      = null; // which ha-card node the observer currently watches — render() has three branches, each producing a distinct <ha-card>; Lit discards/recreates it when the branch changes, so the observer must re-attach whenever this differs from the current one
   }
 
   set hass(hass) {
@@ -2758,22 +2784,38 @@ class ChronoSlideshowCard extends LitElement {
     );
   }
 
-  // Lit calls firstUpdated() exactly once, after the component's first
-  // render has completed and patched the shadow DOM — guaranteeing ha-card
-  // exists (given _config is already set by this point). connectedCallback()
-  // cannot be used for this: super.connectedCallback() only schedules the
-  // first render, it does not run it synchronously, so ha-card is provably
-  // absent from the shadow DOM at any point still inside connectedCallback().
-  // Observing the host element instead (the previous approach) is not
+  // Lit calls firstUpdated() exactly once, ever — insufficient here: render()
+  // has three separate branches (sensor-not-found / no-photos / real content),
+  // each a distinct template producing its own <ha-card> element. When the
+  // active branch changes (e.g. files finish loading after an initial
+  // no-photos render), Lit cannot reconcile the differently-shaped template
+  // against the old DOM and discards/recreates the whole subtree, including
+  // a brand-new <ha-card>. An observer attached once in firstUpdated() would
+  // silently keep watching that now-detached node forever, leaving
+  // --scale-factor stuck from whatever branch happened to render first —
+  // confirmed via console: a fresh observer on the live ha-card fired
+  // immediately with the correct height while the original one never fired
+  // again. Called from the class's existing updated() (below), which already
+  // runs after every render for the transition-animation logic — this class
+  // has only one updated(), a second same-named method would silently
+  // replace it, not merge with it, so this lives as its own helper instead of
+  // a duplicate updated(). Comparing against _observedCardEl keeps this a
+  // no-op on the (overwhelmingly common) renders where the branch didn't
+  // change. connectedCallback() cannot be used for the first attachment
+  // either: super.connectedCallback() only schedules the first render, it
+  // does not run it synchronously, so ha-card is provably absent from the
+  // shadow DOM at any point still inside connectedCallback(). Observing the
+  // host element instead (the original, pre-v1.1.39 approach) is not
   // equivalent: on the dashboard the host's own height happens to match
   // ha-card's, masking the bug, but in the editor dialog the host resolves
   // to a real, distinct zero height while ha-card still gets a real height
   // from its own aspect-ratio rule — two different elements with two
   // different sizes, and the wrong one was being watched.
-  firstUpdated(changedProps) {
-    super.firstUpdated(changedProps);
+  _attachResizeObserverIfNeeded() {
     const cardEl = this.shadowRoot?.querySelector('ha-card');
-    if (!cardEl) return;
+    if (!cardEl || cardEl === this._observedCardEl) return;
+    this._resizeObserver?.disconnect();
+    this._observedCardEl = cardEl;
     this._resizeObserver = new ResizeObserver(entries => {
       const height = entries[0]?.contentRect?.height;
       if (!height) return;
@@ -3439,6 +3481,7 @@ class ChronoSlideshowCard extends LitElement {
 
   updated(changedProps) {
     super.updated(changedProps);
+    this._attachResizeObserverIfNeeded();
     if (this._transitioning) this._runTransitionAnimations();
   }
 
