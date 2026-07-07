@@ -6,12 +6,38 @@ import { repeat }                from 'https://unpkg.com/lit@2.0.0/directives/re
 import jsyaml                   from 'https://cdn.jsdelivr.net/npm/js-yaml@4/+esm';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
-const CARD_VERSION = '1.1.44';
+const CARD_VERSION = '1.1.45';
 
 // ─── MDI icon paths ───────────────────────────────────────────────────────────
 const mdiDragHorizontalVariant = 'M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z';
 
 // ─── Version History ──────────────────────────────────────────────────────────
+// v1.1.45: New per-zone position fine-tuning: zone_offset_x/zone_offset_y,
+//          each a flat dictionary keyed by the same 9 zone keys as
+//          zone_alignment. A zone does not stretch to fill its 1/3-width
+//          cell — it shrink-wraps to its own content and sits pinned to
+//          whichever edge its column/row hardcodes (left/center/right,
+//          top/middle/bottom), independent of zone_alignment (which only
+//          governs multiple items' alignment relative to each other within
+//          a zone, not the zone's own position). Applied via
+//          transform: translate(x, y) on .overlay-zone, scaled by
+//          --scale-factor like every other sizing value in this file.
+//          Defaults are signed per zone to exactly reproduce the old fixed
+//          8px padding's visual effect (left column: x:8, right column:
+//          x:-8, center: x:0; same logic top/middle/bottom on y) — nothing
+//          changes visually until a value is explicitly edited. The old
+//          uniform padding: calc(8px * scale) on .overlay-zone is removed
+//          entirely, fully replaced by this. migrateConfig() backfills
+//          missing zone keys in both dictionaries, same pattern as
+//          zone_alignment. Editor: one new "Margins (x,y)" row per band,
+//          each cell holding a compact X/Y field pair instead of a 4th
+//          full-width row — kept the Zones panel from growing by 2 full
+//          rows per band. Required exposing CsTextfield's internal <input>
+//          via part="input" (a CSS Shadow Part) so the editor's own
+//          stylesheet could size these specific instances smaller than
+//          every other text field in the panel — the component previously
+//          had no external sizing hook at all; harmless addition, nothing
+//          else targets that part name.
 // v1.1.44: Partial revert of 1.1.43's blanket unit-suffix removal: restored
 //          "Display time (seconds)". "Transition duration" also restored
 //          with a unit suffix, but spelled out as "(seconds)" rather than
@@ -695,6 +721,36 @@ const DEFAULT_ZONE_ALIGNMENT = {
   'bottom-right':  'right',
 };
 
+// Per-zone position fine-tuning, replacing the old fixed 8px padding that
+// used to sit uniformly on .overlay-zone regardless of which edge it was
+// pinned to. Signed so each zone's default reproduces that exact old inset
+// direction: left-column zones shift right (+8), right-column shift left
+// (-8), center columns don't shift horizontally (0) — same logic for
+// top/middle/bottom rows on the Y axis. A zone in a corner gets both.
+const DEFAULT_ZONE_OFFSET_X = {
+  'top-left':      8,
+  'top-center':    0,
+  'top-right':    -8,
+  'middle-left':   8,
+  'middle-center': 0,
+  'middle-right': -8,
+  'bottom-left':   8,
+  'bottom-center': 0,
+  'bottom-right': -8,
+};
+
+const DEFAULT_ZONE_OFFSET_Y = {
+  'top-left':      8,
+  'top-center':    8,
+  'top-right':     8,
+  'middle-left':   0,
+  'middle-center': 0,
+  'middle-right':  0,
+  'bottom-left':  -8,
+  'bottom-center':-8,
+  'bottom-right': -8,
+};
+
 // Reference card height (px) at which a font_size value renders at its
 // literal em size (scale factor 1). This is the fixed height the HA card
 // editor uses when no real dashboard parent constrains the preview. Any
@@ -776,6 +832,8 @@ const DEFAULT_CONFIG = {
   dimmer_aggressiveness:  50,
   zone_modes:             { ...DEFAULT_ZONE_MODES },
   zone_alignment:         { ...DEFAULT_ZONE_ALIGNMENT },
+  zone_offset_x:          { ...DEFAULT_ZONE_OFFSET_X },
+  zone_offset_y:          { ...DEFAULT_ZONE_OFFSET_Y },
   items:                  [],
 };
 
@@ -1051,6 +1109,20 @@ function migrateConfig(config) {
   const missingAlignmentKey = Object.keys(DEFAULT_ZONE_ALIGNMENT).some(k => !(k in zoneAlignment));
   if (missingAlignmentKey) {
     config   = { ...config, zone_alignment: { ...DEFAULT_ZONE_ALIGNMENT, ...zoneAlignment } };
+    migrated = true;
+  }
+
+  const zoneOffsetX = config.zone_offset_x ?? {};
+  const missingOffsetXKey = Object.keys(DEFAULT_ZONE_OFFSET_X).some(k => !(k in zoneOffsetX));
+  if (missingOffsetXKey) {
+    config   = { ...config, zone_offset_x: { ...DEFAULT_ZONE_OFFSET_X, ...zoneOffsetX } };
+    migrated = true;
+  }
+
+  const zoneOffsetY = config.zone_offset_y ?? {};
+  const missingOffsetYKey = Object.keys(DEFAULT_ZONE_OFFSET_Y).some(k => !(k in zoneOffsetY));
+  if (missingOffsetYKey) {
+    config   = { ...config, zone_offset_y: { ...DEFAULT_ZONE_OFFSET_Y, ...zoneOffsetY } };
     migrated = true;
   }
 
@@ -1383,6 +1455,7 @@ class CsTextfield extends LitElement {
   render() {
     return html`
       <input
+        part="input"
         .value=${live(this.value ?? '')}
         type=${this.type ?? 'text'}
         step=${this.step ?? ''}
@@ -1810,6 +1883,20 @@ class ChronoSlideshowCardEditor extends LitElement {
     this._fireConfig();
   }
 
+  // axis is 'x' or 'y', selecting zone_offset_x or zone_offset_y.
+  _zoneOffsetChanged(axis, zoneKey, e) {
+    if (!this._config) return;
+    this._clearUndo();
+    const raw    = e.target.value ?? e.detail?.value;
+    const parsed = csParseNumber(raw);
+    if (parsed === null) return;
+    const configKey = axis === 'x' ? 'zone_offset_x' : 'zone_offset_y';
+    const defaults   = axis === 'x' ? DEFAULT_ZONE_OFFSET_X : DEFAULT_ZONE_OFFSET_Y;
+    const updated    = { ...(this._config[configKey] ?? defaults), [zoneKey]: parsed };
+    this._config     = { ...this._config, [configKey]: updated };
+    this._fireConfig();
+  }
+
   // ── Item-level UI field changed ───────────────────────────────────────────
   _itemChanged(index, key, e) {
     if (!this._config) return;
@@ -1976,6 +2063,8 @@ class ChronoSlideshowCardEditor extends LitElement {
   _renderZoneModesPanel() {
     const zoneModes     = this._config?.zone_modes     ?? DEFAULT_ZONE_MODES;
     const zoneAlignment = this._config?.zone_alignment ?? DEFAULT_ZONE_ALIGNMENT;
+    const zoneOffsetX   = this._config?.zone_offset_x  ?? DEFAULT_ZONE_OFFSET_X;
+    const zoneOffsetY   = this._config?.zone_offset_y  ?? DEFAULT_ZONE_OFFSET_Y;
     const bands = ['top', 'middle', 'bottom'];
     return html`
       <ha-expansion-panel header="Zones configuration" outlined .expanded=${false}>
@@ -1983,7 +2072,10 @@ class ChronoSlideshowCardEditor extends LitElement {
           Static zones stay fixed on screen. Dynamic zones transition together
           with the photo. Alignment controls how multiple items stacked in the
           same zone align relative to each other — independent from which
-          screen position the zone itself occupies. All overlay items placed
+          screen position the zone itself occupies. Margins shift the entire
+          zone's contents left/right (x) and up/down (y), since a zone does
+          not stretch to fill its 1/3 of the screen — it sits pinned to
+          whichever edge its column/row dictates. All overlay items placed
           in a zone share that zone's settings.
         </p>
         ${bands.map(band => {
@@ -2004,6 +2096,27 @@ class ChronoSlideshowCardEditor extends LitElement {
                 ${cols.map(g => {
                   const zoneKey = `${g.vertical}-${g.horizontal}`;
                   return csSelectField('', zoneAlignment[zoneKey] ?? g.horizontal, this._zoneAlignmentOptions, e => this._zoneAlignmentChanged(zoneKey, e));
+                })}
+
+                <div class="zone-band-rowlabel">Margins (x,y)</div>
+                ${cols.map(g => {
+                  const zoneKey = `${g.vertical}-${g.horizontal}`;
+                  return html`
+                    <div class="zone-offset-pair">
+                      <chrono-cs-textfield
+                        class="zone-offset-mini"
+                        type="number" step="1"
+                        .value=${String(zoneOffsetX[zoneKey] ?? 0)}
+                        @input=${e => this._zoneOffsetChanged('x', zoneKey, e)}
+                      ></chrono-cs-textfield>
+                      <chrono-cs-textfield
+                        class="zone-offset-mini"
+                        type="number" step="1"
+                        .value=${String(zoneOffsetY[zoneKey] ?? 0)}
+                        @input=${e => this._zoneOffsetChanged('y', zoneKey, e)}
+                      ></chrono-cs-textfield>
+                    </div>
+                  `;
                 })}
               </div>
             </div>
@@ -2314,6 +2427,23 @@ class ChronoSlideshowCardEditor extends LitElement {
       font-size: 12px;
       color: var(--secondary-text-color);
       text-align: center;
+    }
+
+    .zone-offset-pair {
+      display: flex;
+      gap: 4px;
+    }
+
+    .zone-offset-mini {
+      width: 0; /* flex-basis via flex:1 below — width:0 avoids intrinsic-content overflow */
+      flex: 1;
+    }
+
+    .zone-offset-mini::part(input) {
+      height: 32px;
+      font-size: 13px;
+      text-align: center;
+      padding: 0 4px;
     }
 
     /* ── Text fields ───────────────────────────────────────────────────────── */
@@ -3355,8 +3485,13 @@ class ChronoSlideshowCard extends LitElement {
     if (items.length === 0) return html``;
     const zoneKey   = `${vertical}-${horizontal}`;
     const alignment = this._config?.zone_alignment?.[zoneKey] ?? DEFAULT_ZONE_ALIGNMENT[zoneKey] ?? horizontal;
+    const offsetX   = this._config?.zone_offset_x?.[zoneKey] ?? DEFAULT_ZONE_OFFSET_X[zoneKey] ?? 0;
+    const offsetY   = this._config?.zone_offset_y?.[zoneKey] ?? DEFAULT_ZONE_OFFSET_Y[zoneKey] ?? 0;
     return html`
-      <div class="overlay-zone overlay-zone-align-${alignment}">
+      <div
+        class="overlay-zone overlay-zone-align-${alignment}"
+        style="transform: translate(calc(${offsetX}px * var(--scale-factor, 1)), calc(${offsetY}px * var(--scale-factor, 1)));"
+      >
         ${items.map(item => this._renderItem(item, indexOf.get(item)))}
       </div>
     `;
@@ -3658,7 +3793,6 @@ class ChronoSlideshowCard extends LitElement {
       flex-direction: column;
       gap: calc(4px * var(--scale-factor, 1));
       pointer-events: auto;
-      padding: calc(8px * var(--scale-factor, 1));
     }
     /* Keyed by the zone's configured alignment (zone_alignment), not its
        screen position — the two are independent since 0.0.23. */
